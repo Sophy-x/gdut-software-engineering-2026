@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>aria Evaluation Report</title>
+  <style>
+    body { font-family: sans-serif; max-width: 1100px; margin: 2rem auto; color: #222; }
+    .metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: .75rem; }
+    .metric { padding: 1rem; background: #f1f3f5; border-radius: .4rem; }
+    .value { display: block; font-size: 1.5rem; font-weight: bold; margin-top: .35rem; }
+    table { width: 100%; border-collapse: collapse; margin: 1rem 0 2rem; }
+    th, td { border-bottom: 1px solid #ddd; padding: .6rem; text-align: left; }
+    .pass { color: #16803c; }
+    .fail { color: #b42318; }
+  </style>
+</head>
+<body>
+  <h1>aria Evaluation Report</h1>
+  <section>
+  <h2>核心链路回归</h2>
+  <p>固定脚本验证模块协作，不衡量模型能力</p>
+  <p>样本数：6，通过数：6</p>
+  <p>估算上下文 Token 基于本地字符估算，不等同于服务端 usage；服务端实际 Token 无数据时留空</p>
+  <p>样本少于 20，P50/P95 仅为观察值，不代表稳定性能结论</p>
+  <section class="metrics">
+    <div class="metric">场景通过率<span class="value">100.0%</span></div>
+    <div class="metric">断言通过率<span class="value">100.0%</span></div>
+    <div class="metric">工具成功率<span class="value">75.0%</span></div>
+    <div class="metric">工具恢复率<span class="value">100.0%</span></div>
+    <div class="metric">持久化成功率<span class="value">100.0%</span></div>
+    <div class="metric">降级率<span class="value">0.0%</span></div>
+    <div class="metric">平均耗时<span class="value">90.03 ms</span></div>
+    <div class="metric">P50 耗时（观察值）<span class="value">8.63 ms</span></div>
+    <div class="metric">P95 耗时（观察值）<span class="value">382.98 ms</span></div>
+    <div class="metric">平均模型请求<span class="value">2.00</span></div>
+    <div class="metric">平均请求耗时<span class="value">0.00 ms</span></div>
+    <div class="metric">请求 P50（观察值）<span class="value">0.00 ms</span></div>
+    <div class="metric">请求 P95（观察值）<span class="value">0.00 ms</span></div>
+    <div class="metric">平均缓存命中率<span class="value"></span></div>
+    <div class="metric">缓存命中 Token 合计<span class="value"></span></div>
+  </section>
+  <h3>场景结果</h3>
+  <table>
+    <thead><tr><th>场景</th><th>任务 ID</th><th>来源</th><th>分组</th><th>基线提交</th><th>变更文件</th><th>类型</th><th>状态</th><th>错误类别</th><th>失败阶段</th><th>错误详情</th><th>停止原因</th><th>Agent 执行环境</th><th>Agent 验证命令</th><th>官方 Harness</th><th>耗时</th><th>模型请求</th><th>工具回合</th><th>并行批次</th><th>工具批次耗时</th><th>工具调用</th><th>重试</th><th>压缩</th><th>估算上下文 Token</th><th>服务端实际 Token</th><th>缓存命中 Token</th><th>缓存命中率</th></tr></thead>
+    <tbody><tr><td>multi_turn_memory</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td><td>核心链路回归</td><td class="pass">通过</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td><td>9.27 ms</td><td>2</td><td>0</td><td>0</td><td>0.00 ms</td><td>0</td><td>0</td><td>0</td><td>44</td><td></td><td></td><td></td></tr>
+<tr><td>file_edit</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td><td>核心链路回归</td><td class="pass">通过</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td><td>0.59 ms</td><td>3</td><td>0</td><td>0</td><td>0.00 ms</td><td>2</td><td>0</td><td>0</td><td>86</td><td></td><td></td><td></td></tr>
+<tr><td>tool_failure_recovery</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td><td>核心链路回归</td><td class="pass">通过</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td><td>0.50 ms</td><td>3</td><td>0</td><td>0</td><td>0.00 ms</td><td>2</td><td>0</td><td>0</td><td>85</td><td></td><td></td><td></td></tr>
+<tr><td>compaction_restore</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td><td>核心链路回归</td><td class="pass">通过</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td><td>16.81 ms</td><td>2</td><td>0</td><td>0</td><td>0.00 ms</td><td>0</td><td>0</td><td>1</td><td>1276</td><td></td><td></td><td></td></tr>
+<tr><td>cancelled_tool_restore</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td><td>核心链路回归</td><td class="pass">通过</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td><td>8.00 ms</td><td>0</td><td>0</td><td>0</td><td>0.00 ms</td><td>0</td><td>0</td><td>0</td><td>0</td><td></td><td></td><td></td></tr>
+<tr><td>model_network_retry</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td><td>核心链路回归</td><td class="pass">通过</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td><td>505.03 ms</td><td>2</td><td>0</td><td>0</td><td>0.00 ms</td><td>0</td><td>1</td><td>0</td><td>16</td><td></td><td></td><td></td></tr></tbody>
+  </table>
+  <h3>失败断言</h3>
+  <table>
+    <thead><tr><th>场景</th><th>断言</th><th>原因</th></tr></thead>
+    <tbody><tr><td colspan=3>无失败断言</td></tr></tbody>
+  </table>
+</section>
+  <section>
+  <h2>真实任务评测</h2>
+  <p>使用真实模型任务衡量 Agent 的任务完成能力</p>
+  <p>样本数：0，通过数：0</p>
+  <p>估算上下文 Token 基于本地字符估算，不等同于服务端 usage；服务端实际 Token 无数据时留空</p>
+  <p>样本少于 20，P50/P95 仅为观察值，不代表稳定性能结论</p>
+  <section class="metrics">
+    <div class="metric">任务完成率<span class="value">0.0%</span></div>
+    <div class="metric">断言通过率<span class="value">0.0%</span></div>
+    <div class="metric">工具成功率<span class="value">0.0%</span></div>
+    <div class="metric">工具恢复率<span class="value">0.0%</span></div>
+    <div class="metric">持久化成功率<span class="value">0.0%</span></div>
+    <div class="metric">降级率<span class="value">0.0%</span></div>
+    <div class="metric">平均耗时<span class="value">0.00 ms</span></div>
+    <div class="metric">P50 耗时（观察值）<span class="value">0.00 ms</span></div>
+    <div class="metric">P95 耗时（观察值）<span class="value">0.00 ms</span></div>
+    <div class="metric">平均模型请求<span class="value">0.00</span></div>
+    <div class="metric">平均请求耗时<span class="value">0.00 ms</span></div>
+    <div class="metric">请求 P50（观察值）<span class="value">0.00 ms</span></div>
+    <div class="metric">请求 P95（观察值）<span class="value">0.00 ms</span></div>
+    <div class="metric">平均缓存命中率<span class="value"></span></div>
+    <div class="metric">缓存命中 Token 合计<span class="value"></span></div>
+  </section>
+  <h3>场景结果</h3>
+  <table>
+    <thead><tr><th>场景</th><th>任务 ID</th><th>来源</th><th>分组</th><th>基线提交</th><th>变更文件</th><th>类型</th><th>状态</th><th>错误类别</th><th>失败阶段</th><th>错误详情</th><th>停止原因</th><th>Agent 执行环境</th><th>Agent 验证命令</th><th>官方 Harness</th><th>耗时</th><th>模型请求</th><th>工具回合</th><th>并行批次</th><th>工具批次耗时</th><th>工具调用</th><th>重试</th><th>压缩</th><th>估算上下文 Token</th><th>服务端实际 Token</th><th>缓存命中 Token</th><th>缓存命中率</th></tr></thead>
+    <tbody><tr><td colspan=27>暂无结果</td></tr></tbody>
+  </table>
+  <h3>失败断言</h3>
+  <table>
+    <thead><tr><th>场景</th><th>断言</th><th>原因</th></tr></thead>
+    <tbody><tr><td colspan=3>无失败断言</td></tr></tbody>
+  </table>
+</section>
+
+  <section>
+  <h2>代码正确性任务</h2>
+  <p>使用独立 pytest 结果验证模型修改的代码，不依赖回复关键词</p>
+  <p>样本数：0，通过数：0</p>
+  <p>估算上下文 Token 基于本地字符估算，不等同于服务端 usage；服务端实际 Token 无数据时留空</p>
+  <p>样本少于 20，P50/P95 仅为观察值，不代表稳定性能结论</p>
+  <section class="metrics">
+    <div class="metric">任务完成率<span class="value">0.0%</span></div>
+    <div class="metric">断言通过率<span class="value">0.0%</span></div>
+    <div class="metric">工具成功率<span class="value">0.0%</span></div>
+    <div class="metric">工具恢复率<span class="value">0.0%</span></div>
+    <div class="metric">持久化成功率<span class="value">0.0%</span></div>
+    <div class="metric">降级率<span class="value">0.0%</span></div>
+    <div class="metric">平均耗时<span class="value">0.00 ms</span></div>
+    <div class="metric">P50 耗时（观察值）<span class="value">0.00 ms</span></div>
+    <div class="metric">P95 耗时（观察值）<span class="value">0.00 ms</span></div>
+    <div class="metric">平均模型请求<span class="value">0.00</span></div>
+    <div class="metric">平均请求耗时<span class="value">0.00 ms</span></div>
+    <div class="metric">请求 P50（观察值）<span class="value">0.00 ms</span></div>
+    <div class="metric">请求 P95（观察值）<span class="value">0.00 ms</span></div>
+    <div class="metric">平均缓存命中率<span class="value"></span></div>
+    <div class="metric">缓存命中 Token 合计<span class="value"></span></div>
+  </section>
+  <h3>场景结果</h3>
+  <table>
+    <thead><tr><th>场景</th><th>任务 ID</th><th>来源</th><th>分组</th><th>基线提交</th><th>变更文件</th><th>类型</th><th>状态</th><th>错误类别</th><th>失败阶段</th><th>错误详情</th><th>停止原因</th><th>Agent 执行环境</th><th>Agent 验证命令</th><th>官方 Harness</th><th>耗时</th><th>模型请求</th><th>工具回合</th><th>并行批次</th><th>工具批次耗时</th><th>工具调用</th><th>重试</th><th>压缩</th><th>估算上下文 Token</th><th>服务端实际 Token</th><th>缓存命中 Token</th><th>缓存命中率</th></tr></thead>
+    <tbody><tr><td colspan=27>暂无结果</td></tr></tbody>
+  </table>
+  <h3>失败断言</h3>
+  <table>
+    <thead><tr><th>场景</th><th>断言</th><th>原因</th></tr></thead>
+    <tbody><tr><td colspan=3>无失败断言</td></tr></tbody>
+  </table>
+</section>
+  <section>
+  <h2>在线专项</h2>
+  <p>验证压缩、网络等指定运行时能力，不计入真实任务指标</p>
+  <p>样本数：0，通过数：0</p>
+  <p>估算上下文 Token 基于本地字符估算，不等同于服务端 usage；服务端实际 Token 无数据时留空</p>
+  <p>样本少于 20，P50/P95 仅为观察值，不代表稳定性能结论</p>
+  <section class="metrics">
+    <div class="metric">场景通过率<span class="value">0.0%</span></div>
+    <div class="metric">断言通过率<span class="value">0.0%</span></div>
+    <div class="metric">工具成功率<span class="value">0.0%</span></div>
+    <div class="metric">工具恢复率<span class="value">0.0%</span></div>
+    <div class="metric">持久化成功率<span class="value">0.0%</span></div>
+    <div class="metric">降级率<span class="value">0.0%</span></div>
+    <div class="metric">平均耗时<span class="value">0.00 ms</span></div>
+    <div class="metric">P50 耗时（观察值）<span class="value">0.00 ms</span></div>
+    <div class="metric">P95 耗时（观察值）<span class="value">0.00 ms</span></div>
+    <div class="metric">平均模型请求<span class="value">0.00</span></div>
+    <div class="metric">平均请求耗时<span class="value">0.00 ms</span></div>
+    <div class="metric">请求 P50（观察值）<span class="value">0.00 ms</span></div>
+    <div class="metric">请求 P95（观察值）<span class="value">0.00 ms</span></div>
+    <div class="metric">平均缓存命中率<span class="value"></span></div>
+    <div class="metric">缓存命中 Token 合计<span class="value"></span></div>
+  </section>
+  <h3>场景结果</h3>
+  <table>
+    <thead><tr><th>场景</th><th>任务 ID</th><th>来源</th><th>分组</th><th>基线提交</th><th>变更文件</th><th>类型</th><th>状态</th><th>错误类别</th><th>失败阶段</th><th>错误详情</th><th>停止原因</th><th>Agent 执行环境</th><th>Agent 验证命令</th><th>官方 Harness</th><th>耗时</th><th>模型请求</th><th>工具回合</th><th>并行批次</th><th>工具批次耗时</th><th>工具调用</th><th>重试</th><th>压缩</th><th>估算上下文 Token</th><th>服务端实际 Token</th><th>缓存命中 Token</th><th>缓存命中率</th></tr></thead>
+    <tbody><tr><td colspan=27>暂无结果</td></tr></tbody>
+  </table>
+  <h3>失败断言</h3>
+  <table>
+    <thead><tr><th>场景</th><th>断言</th><th>原因</th></tr></thead>
+    <tbody><tr><td colspan=3>无失败断言</td></tr></tbody>
+  </table>
+</section>
+
+</body>
+</html>

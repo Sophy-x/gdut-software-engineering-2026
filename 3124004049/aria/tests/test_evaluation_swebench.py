@@ -1,0 +1,872 @@
+"""验证 SWE-bench 评测器的纯本地补丁处理。"""
+
+import sys
+import types
+from contextlib import asynccontextmanager
+from types import SimpleNamespace
+from pathlib import Path
+
+import pytest
+
+from core.artifacts import ArtifactStore
+from core.model import ModelClientError
+from core.agent_loop import AgentRunResult
+from core.model import Message, ToolCall, ToolResult
+from core.session import Session
+from core.tools import CommandExecution, ToolManager
+from evaluation.models import EvaluationAssertion, EvaluationResult
+from evaluation.swebench_workspace import EvaluationWorkspace
+from evaluation.swebench import _agent_prompt, _changed_files, _normalise_patch_paths, _project_guide_paths, create_patch, load_task
+from evaluation.swebench import _context_builder
+from evaluation.swebench import (
+    DEFAULT_SWEBENCH_MAX_TOOL_ROUNDS,
+    EVALUATION_COMMAND_TIMEOUT_SECONDS,
+    HarnessResult,
+    SWEBENCH_ENVIRONMENT_CONTRACT_VERSION,
+    SwebenchTask,
+    _configuration_record,
+    _agent_end_record,
+    _local_verification_status,
+    _mark_environment_failure_if_no_tool_rounds,
+    _model_error_record,
+    _official_harness_status,
+    _result,
+    _run_task_with_environment_retry,
+    _tool_manager,
+    prepare_repository,
+    verify_patch,
+    run_task,
+)
+
+
+def _fake_settings(model_name: str = "test") -> SimpleNamespace:
+    """构造只带评测所需字段的配置替身（与 Settings 保持一致）。"""
+
+    return SimpleNamespace(
+        model_name=model_name,
+        loop_guard_enabled=True,
+        loop_guard_thresholds=(3, 5, 8),
+        loop_guard_exempt_tools=(),
+        loop_guard_no_progress_rounds=8,
+    )
+
+
+def test_create_patch_uses_repository_relative_paths(tmp_path: Path) -> None:
+    """测试临时目录中的文件修改会变成可应用的相对补丁。"""
+
+    baseline = tmp_path / "baseline"
+    workspace = tmp_path / "workspace"
+    baseline.mkdir()
+    workspace.mkdir()
+    (baseline / "module.py").write_text("value = 1\n", encoding="utf-8")
+    (workspace / "module.py").write_text("value = 2\n", encoding="utf-8")
+
+    changed_files, patch = create_patch(baseline, workspace)
+
+    assert "a/module.py" in patch
+    assert "b/module.py" in patch
+    assert changed_files == ("module.py",)
+
+
+def test_agent_prompt_states_evaluation_workspace_contract(tmp_path: Path) -> None:
+    """测试评测任务提示词提供可执行的环境事实。"""
+
+    task = SwebenchTask("example__1", "example/repo", "base", "issue", "swebench-lite")
+
+    prompt = _agent_prompt(task, tmp_path)
+
+    assert "workspace is already selected for every tool" in prompt
+    assert "run_command already runs from the repository workspace root" in prompt
+    assert "search_files.path must be an existing directory" in prompt
+    assert "source snapshot without Git history" in prompt
+    assert "diagnose the test entry point" in prompt
+
+
+def test_agent_prompt_lists_existing_repository_guides_without_reading_content(
+    tmp_path: Path,
+) -> None:
+    """测试评测提示词只列出固定候选资料的相对路径。"""
+
+    (tmp_path / "README.md").write_text("do not preload this", encoding="utf-8")
+    (tmp_path / "CONTRIBUTING.rst").write_text("contributing", encoding="utf-8")
+    (tmp_path / "pyproject.toml").write_text("project", encoding="utf-8")
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "README.txt").write_text("tests", encoding="utf-8")
+    (tmp_path / "notes.md").write_text("ignore", encoding="utf-8")
+    task = SwebenchTask("example__1", "example/repo", "base", "issue", "swebench-lite")
+
+    prompt = _agent_prompt(task, tmp_path)
+
+    assert _project_guide_paths(tmp_path) == (
+        "README.md",
+        "CONTRIBUTING.rst",
+        "pyproject.toml",
+        "tests/README.txt",
+    )
+    assert "- README.md" in prompt
+    assert "- tests/README.txt" in prompt
+    assert "notes.md" not in prompt
+    assert "do not preload this" not in prompt
+
+
+def test_configuration_record_keeps_environment_contract_version() -> None:
+    """测试评测轨迹记录可复现的模型与开关组合。"""
+
+    assert _configuration_record(40, "test-model", "high", True, False) == {
+        "type": "configuration",
+        "max_tool_rounds": 40,
+        "model_name": "test-model",
+        "thinking": "high",
+        "firewall_enabled": True,
+        "eviction_enabled": False,
+        "swebench_environment_contract": SWEBENCH_ENVIRONMENT_CONTRACT_VERSION,
+    }
+
+
+def test_agent_end_record_keeps_write_verification_trace() -> None:
+    """测试评测轨迹保留写后验证提醒和命令结果。"""
+
+    record = _agent_end_record(
+        AgentRunResult(
+            (),
+            "完成",
+            verification_reminder_injected=True,
+            write_count=2,
+            post_write_command_results=(
+                ToolResult("check-1", "failed", is_error=True, error_category="tool"),
+            ),
+            verification_command_results=(
+                ToolResult("check-1", "failed", is_error=True, error_category="tool"),
+            ),
+        )
+    )
+
+    assert record["verification_reminder_injected"] is True
+    assert record["write_count"] == 2
+    assert record["post_write_command_results"] == [
+        {"call_id": "check-1", "is_error": True, "error_category": "tool"}
+    ]
+    assert record["verification_command_results"] == [
+        {"call_id": "check-1", "is_error": True, "error_category": "tool"}
+    ]
+
+
+def test_verification_statuses_keep_local_and_official_results_separate() -> None:
+    """测试宿主命令失败不会被误写为官方 Harness 环境失败。"""
+
+    run = AgentRunResult(
+        (),
+        "完成",
+        write_count=1,
+        post_write_command_results=(ToolResult("check-1", "failed", is_error=True),),
+        verification_command_results=(ToolResult("check-1", "failed", is_error=True),),
+    )
+
+    assert _local_verification_status(run) == "failed"
+    assert _official_harness_status(HarnessResult(False)) == "failed"
+    assert _official_harness_status(HarnessResult(False, "Docker failed")) == "environment-error"
+
+
+def test_create_patch_ignores_python_runtime_cache(tmp_path: Path) -> None:
+    """测试运行时产生的字节码不会成为待验证补丁。"""
+
+    baseline = tmp_path / "baseline"
+    workspace = tmp_path / "workspace"
+    baseline.mkdir()
+    (workspace / "__pycache__").mkdir(parents=True)
+    (workspace / "__pycache__" / "module.pyc").write_bytes(b"cache")
+
+    changed_files, patch = create_patch(baseline, workspace)
+
+    assert changed_files == ()
+    assert patch == ""
+
+
+def test_create_patch_removes_only_new_runtime_artifacts(tmp_path: Path) -> None:
+    """测试补丁清理不会误删基线已有路径，并覆盖常见新增运行产物。"""
+
+    baseline = tmp_path / "baseline"
+    workspace = tmp_path / "workspace"
+    for root in (baseline, workspace):
+        (root / "module.py").parent.mkdir(parents=True, exist_ok=True)
+        (root / "module.py").write_text("value = 1\n", encoding="utf-8")
+        (root / "tracked.egg-info").mkdir()
+        (root / "tracked.egg-info" / "PKG-INFO").write_text("base\n", encoding="utf-8")
+
+    (workspace / "module.py").write_text("value = 2\n", encoding="utf-8")
+    (workspace / "tracked.egg-info" / "PKG-INFO").write_text("changed\n", encoding="utf-8")
+    for relative_path in (
+        "__pycache__/module.pyc",
+        ".pytest_cache/state",
+        "new.egg-info/PKG-INFO",
+        "build/output.txt",
+        "dist/package.whl",
+        "htmlcov/index.html",
+        ".coverage",
+        "extension.so",
+    ):
+        path = workspace / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"runtime")
+
+    changed_files, patch = create_patch(baseline, workspace)
+
+    assert changed_files == ("module.py", "tracked.egg-info/PKG-INFO")
+    assert "extension.so" not in patch
+    assert not (workspace / "new.egg-info").exists()
+    assert not (workspace / "build").exists()
+    assert (workspace / "tracked.egg-info" / "PKG-INFO").exists()
+
+
+def test_create_patch_hides_runtime_artifacts_when_cleanup_misses_them(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """测试 diff 阶段仍会排除清理阶段遗漏的新增运行产物。"""
+
+    baseline = tmp_path / "baseline"
+    workspace = tmp_path / "workspace"
+    baseline.mkdir()
+    workspace.mkdir()
+    (baseline / "module.py").write_text("value = 1\n", encoding="utf-8")
+    (workspace / "module.py").write_text("value = 2\n", encoding="utf-8")
+    artifact = workspace / "new.egg-info" / "PKG-INFO"
+    artifact.parent.mkdir()
+    artifact.write_text("runtime\n", encoding="utf-8")
+    monkeypatch.setattr("evaluation.swebench._remove_runtime_artifacts", lambda *_: None)
+
+    changed_files, patch = create_patch(baseline, workspace)
+
+    assert changed_files == ("module.py",)
+    assert "new.egg-info" not in patch
+    assert artifact.exists()
+
+
+def test_normalise_patch_paths_preserves_standard_headers(tmp_path: Path) -> None:
+    """测试路径归一化不破坏标准补丁头部。"""
+
+    baseline = tmp_path / "baseline"
+    workspace = tmp_path / "workspace"
+    patch = (
+        f"diff --git a/{baseline.resolve().as_posix().lstrip('/')}/a.py "
+        f"b/{workspace.resolve().as_posix().lstrip('/')}/a.py\n"
+        f"--- a/{baseline.resolve().as_posix().lstrip('/')}/a.py\n"
+        f"+++ b/{workspace.resolve().as_posix().lstrip('/')}/a.py\n"
+    )
+
+    normalised = _normalise_patch_paths(patch, baseline, workspace)
+
+    assert normalised == "diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n"
+    assert _changed_files(normalised) == ("a.py",)
+
+
+@pytest.mark.asyncio
+async def test_evaluation_context_uses_production_system_prompt(tmp_path: Path) -> None:
+    """测试真实评测请求与生产入口一样包含系统提示词。"""
+
+    session = Session(tmp_path)
+    session.add_user_message("修复一个问题")
+    build_context = _context_builder(
+        session,
+        object(),  # type: ignore[arg-type]
+        False,
+        [],
+        "test-model",
+        ToolManager(),
+        tmp_path,
+    )
+
+    result = await build_context(session.get_messages(), False)
+
+    assert result.messages[0].role == "system"
+    assert "test-model" in result.messages[0].content
+    assert any(
+        f"Current workspace root: `{tmp_path}`" in message.content
+        for message in result.messages
+        if message.role == "system"
+    )
+    session.close()
+
+
+def test_model_request_error_keeps_model_failure_category() -> None:
+    """测试模型请求异常不会被误记为环境失败。"""
+
+    task = SwebenchTask("example__1", "example/repo", "base", "issue", "swebench-lite")
+    result = _result(
+        task,
+        0.0,
+        None,
+        [],
+        (),
+        (),
+        False,
+        False,
+        "agent-loop: ModelClientError: failed",
+        "model",
+    )
+
+    assert result.error_category == "model"
+
+
+def test_swebench_result_keeps_agent_stop_trace() -> None:
+    """测试真实任务结果保留 Agent 的回合数和停止原因。"""
+
+    task = SwebenchTask("example__1", "example/repo", "base", "issue", "swebench-lite")
+
+    result = _result(
+        task,
+        0.0,
+        None,
+        [{"type": "tool_batch", "execution_mode": "parallel", "duration_ms": 12.5}],
+        (),
+        (),
+        False,
+        False,
+        None,
+        tool_rounds=4,
+        stop_reason="tool_limit",
+    )
+
+    assert result.tool_rounds == 4
+    assert result.stop_reason == "tool_limit"
+    assert result.parallel_tool_batches == 1
+    assert result.tool_batch_duration_ms == 12.5
+
+
+def test_swebench_result_keeps_verification_classification() -> None:
+    """测试结果分别保存本地命令和官方 Harness 的分类。"""
+
+    task = SwebenchTask("example__1", "example/repo", "base", "issue", "swebench-lite")
+    result = _result(
+        task,
+        0.0,
+        None,
+        [],
+        (EvaluationAssertion("official-harness", False, "官方 Harness 未通过"),),
+        (),
+        False,
+        False,
+        None,
+        error_stage="official-harness",
+        agent_execution_environment="official-instance-container",
+        agent_verification_status="failed",
+        official_harness_status="failed",
+    )
+
+    assert result.error_stage == "official-harness"
+    assert result.agent_execution_environment == "official-instance-container"
+    assert result.agent_verification_status == "failed"
+    assert result.official_harness_status == "failed"
+
+
+def test_model_error_record_omits_request_content() -> None:
+    """测试模型失败轨迹只保留类别和异常类型。"""
+
+    event = _model_error_record(
+        ModelClientError("safe message", category="network", retryable=True, cause=ValueError("secret"))
+    )
+
+    assert event == {
+        "type": "model_error",
+        "category": "network",
+        "retryable": True,
+        "cause_type": "ValueError",
+    }
+
+
+def test_prepare_repository_skips_fetch_when_commit_is_cached(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """测试已有基线提交时不会重复访问远端仓库。"""
+
+    task = SwebenchTask("example__1", "example/repo", "base", "issue", "swebench-lite")
+    repository = tmp_path / "example__repo"
+    repository.mkdir()
+    monkeypatch.setattr("evaluation.swebench._has_commit", lambda *_: True)
+    calls: list[list[str]] = []
+    monkeypatch.setattr("evaluation.swebench._run_git", calls.append)
+
+    assert prepare_repository(task, tmp_path) == repository
+    assert calls == []
+
+
+def test_evaluation_command_uses_longer_timeout(tmp_path: Path) -> None:
+    """测试评测命令可容纳仓库自身的较长测试。"""
+
+    definition = next(
+        item for item in _tool_manager(tmp_path).list_definitions() if item.name == "run_command"
+    )
+
+    assert definition.name == "run_command"
+    assert EVALUATION_COMMAND_TIMEOUT_SECONDS == 300.0
+    assert DEFAULT_SWEBENCH_MAX_TOOL_ROUNDS == 40
+
+
+def test_verify_patch_marks_harness_exit_without_report_as_environment_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """测试 Harness 未产出报告且非零退出时不会被误判为 Agent 失败。"""
+
+    task = SwebenchTask("example__1", "example/repo", "base", "issue", "swebench-lite")
+
+    class Completed:
+        returncode = 17
+        stdout = "harness failed"
+
+    monkeypatch.setattr("evaluation.swebench.subprocess.run", lambda *args, **kwargs: Completed())
+
+    assert verify_patch(task, "", tmp_path, "python") == HarnessResult(
+        False, "官方 Harness 执行失败，退出码 17"
+    )
+
+
+def test_verify_patch_reports_unparseable_harness_test_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """测试 Harness 未解析测试日志时保留真实失败并给出诊断。"""
+
+    task = SwebenchTask("example__1", "example/repo", "base", "issue", "swebench-lite")
+    run_id = "example-1"
+    (tmp_path / f"aria.{run_id}.json").write_text(
+        '{"resolved_ids": [], "infra_failure_instances": 0, "error_instances": 0}',
+        encoding="utf-8",
+    )
+    instance_report = tmp_path / "logs" / "run_evaluation" / run_id / "aria" / task.instance_id / "report.json"
+    instance_report.parent.mkdir(parents=True)
+    instance_report.write_text(
+        '{"example__1": {"patch_exists": true, "patch_successfully_applied": false, "infra_failure": false}}',
+        encoding="utf-8",
+    )
+
+    class Completed:
+        returncode = 0
+        stdout = "harness completed"
+
+    monkeypatch.setattr("evaluation.swebench.subprocess.run", lambda *args, **kwargs: Completed())
+
+    assert verify_patch(task, "patch", tmp_path, "python") == HarnessResult(
+        False,
+        diagnostic="官方 Harness 已完成任务，但测试日志未能解析为结果；该字段不等同于 Git 补丁未应用",
+    )
+
+
+def test_load_task_keeps_official_instance_image(monkeypatch: pytest.MonkeyPatch) -> None:
+    """测试任务加载保留官方 Harness 提供的实例镜像。"""
+
+    dataset_module = types.ModuleType("datasets")
+    dataset_module.load_dataset = lambda *args, **kwargs: [
+        {
+            "instance_id": "example__1",
+            "repo": "example/repo",
+            "base_commit": "base",
+            "problem_statement": "issue",
+            "image": "sweb.eval.x86_64.example__1",
+        }
+    ]
+    monkeypatch.setitem(sys.modules, "datasets", dataset_module)
+
+    task = load_task("example__1", "swebench-lite")
+
+    assert task.instance_image == "sweb.eval.x86_64.example__1"
+
+
+@pytest.mark.asyncio
+async def test_tool_manager_passes_injected_executor_to_run_command(tmp_path: Path) -> None:
+    """测试评测工具管理器会将命令交给评测执行后端。"""
+
+    class FakeExecutor:
+        def __init__(self) -> None:
+            self.command: str | None = None
+
+        async def execute(
+            self,
+            command: str,
+            cwd: Path,
+            timeout_seconds: float,
+        ) -> CommandExecution:
+            self.command = command
+            return CommandExecution(b"container output", b"", 0)
+
+    executor = FakeExecutor()
+    manager = _tool_manager(tmp_path, executor)
+
+    result = await manager.execute(ToolCall("call-1", "run_command", {"command": "pwd"}))
+
+    assert result.content == "container output"
+    assert executor.command == "pwd"
+
+
+@pytest.mark.asyncio
+async def test_patch_generation_failure_keeps_completed_agent_trace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """测试补丁生成失败不会丢失已结束 Agent 的归因信息。"""
+
+    baseline = tmp_path / "baseline"
+    workspace = tmp_path / "workspace"
+    session_root = tmp_path / "session"
+    for path in (baseline, workspace, session_root):
+        path.mkdir()
+    workspaces = iter(
+        (
+            EvaluationWorkspace(baseline, session_root),
+            EvaluationWorkspace(workspace, session_root),
+        )
+    )
+
+    class FakeContainer:
+        def __init__(self, image: str, container_workspace: Path) -> None:
+            self.container_id = "container-1"
+
+        @asynccontextmanager
+        async def running(self):
+            yield "container-1"
+
+    class FakeAgentLoop:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        async def run(self, *args, **kwargs) -> AgentRunResult:
+            return AgentRunResult(
+                (),
+                "完成",
+                stop_reason="tool_limit",
+                tool_rounds=7,
+                write_count=1,
+                post_write_command_results=(ToolResult("check-1", "failed", is_error=True),),
+                verification_command_results=(ToolResult("check-1", "failed", is_error=True),),
+            )
+
+    class FakeTimedClient:
+        requests: list = []
+        durations_ms: list[float] = []
+        total_actual_tokens = None
+        total_cached_tokens = None
+        cache_hit_rate = None
+
+        def __init__(self, client) -> None:
+            pass
+
+        async def close(self) -> None:
+            pass
+
+    task = SwebenchTask(
+        "example__1",
+        "example/repo",
+        "base",
+        "issue",
+        "swebench-lite",
+        "sweb.eval.example__1",
+    )
+    monkeypatch.setattr("evaluation.swebench.prepare_repository", lambda *args: tmp_path)
+    monkeypatch.setattr("evaluation.swebench.prepare_evaluation_workspace", lambda *args: next(workspaces))
+    monkeypatch.setattr("evaluation.swebench.SwebenchTaskContainer", FakeContainer)
+    monkeypatch.setattr("evaluation.swebench.AgentLoop", FakeAgentLoop)
+    monkeypatch.setattr("evaluation.swebench.OpenAICompatibleClient", lambda settings: object())
+    monkeypatch.setattr("evaluation.swebench.TimedModelClient", FakeTimedClient)
+    monkeypatch.setattr("evaluation.swebench.load_settings", _fake_settings)
+    monkeypatch.setattr(
+        "evaluation.swebench.create_patch",
+        lambda *args: (_ for _ in ()).throw(PermissionError("cache denied")),
+    )
+    monkeypatch.setattr(
+        "evaluation.swebench.verify_patch",
+        lambda *args: pytest.fail("补丁生成失败后不得调用 Harness"),
+    )
+
+    result = await run_task(task, tmp_path / "result", "python")
+
+    assert result.error_category == "environment"
+    assert result.error_stage == "patch-generation"
+    assert result.tool_rounds == 7
+    assert result.stop_reason == "tool_limit"
+    assert result.agent_execution_environment == "official-instance-container"
+    assert result.agent_verification_status == "failed"
+    assert result.official_harness_status is None
+    assert result.assertions[0].name == "patch-generation"
+    assert any(event["type"] == "agent_end" for event in result.events)
+
+
+def _bare_result(*, tool_rounds: int, group: str = "normal") -> EvaluationResult:
+    """构造只关心工具回合数的评测结果，用于环境失败判定测试。"""
+
+    return EvaluationResult(
+        scenario="task",
+        duration_ms=1,
+        evaluation_group=group,
+        tool_rounds=tool_rounds,
+    )
+
+
+def _simple_task() -> SwebenchTask:
+    """构造不带官方镜像的最小任务元数据。"""
+
+    return SwebenchTask("example__1", "example/repo", "base", "issue", "swebench-lite")
+
+
+def test_result_without_tool_rounds_is_marked_environment() -> None:
+    """测试工具回合为 0 的结果被标记为环境失败。"""
+
+    marked = _mark_environment_failure_if_no_tool_rounds(_bare_result(tool_rounds=0))
+
+    assert marked.error_category == "environment"
+    assert any(assertion.name == "environment" for assertion in marked.assertions)
+    assert not marked.passed
+
+
+def test_result_with_tool_rounds_is_left_unchanged() -> None:
+    """测试有工具回合的结果不被环境失败标记覆盖。"""
+
+    result = _bare_result(tool_rounds=3)
+
+    assert _mark_environment_failure_if_no_tool_rounds(result) is result
+
+
+@pytest.mark.asyncio
+async def test_environment_retry_prefers_successful_rerun(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """测试工具回合为 0 时原地重跑，并采用重跑成功的结果。"""
+
+    calls: list[dict[str, object]] = []
+
+    async def fake_run_task(*args, **kwargs) -> EvaluationResult:
+        calls.append(kwargs)
+        return _bare_result(tool_rounds=0 if len(calls) == 1 else 5)
+
+    monkeypatch.setattr("evaluation.swebench.run_task", fake_run_task)
+    result = await _run_task_with_environment_retry(
+        _simple_task(),
+        tmp_path,
+        "python",
+        compact=False,
+        max_tool_rounds=40,
+        thinking="low",
+        firewall_enabled=False,
+        eviction_enabled=True,
+    )
+
+    assert result.tool_rounds == 5
+    assert len(calls) == 2
+    assert calls[0] == calls[1]
+    assert calls[0]["thinking"] == "low"
+    assert calls[0]["firewall_enabled"] is False
+    assert calls[0]["eviction_enabled"] is True
+
+
+@pytest.mark.asyncio
+async def test_environment_retry_groups_persistent_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """测试重跑后仍无工具回合时归入环境分组，不计入通过率分母。"""
+
+    async def fake_run_task(*args, **kwargs) -> EvaluationResult:
+        return _bare_result(tool_rounds=0)
+
+    monkeypatch.setattr("evaluation.swebench.run_task", fake_run_task)
+    result = await _run_task_with_environment_retry(
+        _simple_task(),
+        tmp_path,
+        "python",
+        compact=False,
+        max_tool_rounds=40,
+        thinking="high",
+        firewall_enabled=True,
+        eviction_enabled=False,
+    )
+
+    assert result.evaluation_group == "environment"
+
+
+@pytest.mark.asyncio
+async def test_evaluation_tool_manager_reads_artifact_reference(tmp_path: Path) -> None:
+    """测试评测工具集能通过 artifact:// 取回落盘工具输出。"""
+
+    store = ArtifactStore.for_workspace(tmp_path)
+    store.set_session_id("s-1")
+    artifact_id = store.save(
+        "stored body\n", session_id="s-1", source_tool="run_command"
+    )
+    manager = _tool_manager(tmp_path, artifact_store=store)
+
+    result = await manager.execute(
+        ToolCall("call-1", "read_file", {"path": f"artifact://{artifact_id}"})
+    )
+
+    assert "stored body" in result.content
+
+
+@pytest.mark.asyncio
+async def test_evaluation_context_persists_eviction(tmp_path: Path) -> None:
+    """测试驱逐触发时会写入评测 Session 并留下事件记录。"""
+
+    session = Session(tmp_path)
+    store = ArtifactStore.for_workspace(tmp_path)
+    store.set_session_id(session.session_id)
+    events: list[dict[str, object]] = []
+    build_context = _context_builder(
+        session,
+        object(),  # type: ignore[arg-type]
+        False,
+        events,
+        "test-model",
+        ToolManager(),
+        tmp_path,
+        artifact_store=store,
+        eviction_enabled=True,
+    )
+    content = "\n".join("x" * 40 for _ in range(200))
+    messages = [Message(role="tool", content=content) for _ in range(30)]
+
+    result = await build_context(messages, False)
+
+    assert result.eviction is not None
+    assert session.get_evictions()
+    eviction_event = next(
+        event for event in events if event.get("type") == "eviction"
+    )
+    assert eviction_event["tokens_before"] == result.eviction.tokens_before
+    assert eviction_event["tokens_after"] == result.eviction_tokens_after
+    assert eviction_event["evicted_outputs"] == len(result.eviction.evicted)
+    artifact_id = result.eviction.evicted[0].artifact_id
+    assert store.load(artifact_id) is not None
+    assert any(
+        f"artifact://{artifact_id}" in message.content for message in result.messages
+    )
+    session.close()
+
+
+@pytest.mark.asyncio
+async def test_evaluation_context_records_eviction_gate_rejection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """测试节省不足时记录 gate 拦截事件且不写驱逐记录。"""
+
+    monkeypatch.setattr("core.context.KEEP_RECENT_TOOL_OUTPUT_TOKENS", 100)
+    session = Session(tmp_path)
+    store = ArtifactStore.for_workspace(tmp_path)
+    store.set_session_id(session.session_id)
+    events: list[dict[str, object]] = []
+    build_context = _context_builder(
+        session,
+        object(),  # type: ignore[arg-type]
+        False,
+        events,
+        "test-model",
+        ToolManager(),
+        tmp_path,
+        artifact_store=store,
+        eviction_enabled=True,
+        eviction_threshold_tokens=4_000,
+    )
+    content = "\n".join("x" * 40 for _ in range(200))
+    messages = [
+        Message(role="tool", content=content),
+        Message(role="tool", content=content),
+        Message(role="user", content="继续"),
+    ]
+
+    result = await build_context(messages, False)
+
+    assert result.eviction is None
+    assert result.eviction_gate_rejected is True
+    gate_event = next(
+        event
+        for event in events
+        if event.get("type") == "eviction_gate_rejected"
+    )
+    assert gate_event["tokens_before"] == result.eviction_tokens_before
+    assert gate_event["tokens_after"] == result.eviction_tokens_after
+    assert session.get_evictions() == []
+    session.close()
+
+
+@pytest.mark.asyncio
+async def test_run_task_binds_artifact_store_to_agent_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """测试评测 AgentLoop 与 Artifact Store 使用同一会话，产物可按 id 取回。"""
+
+    baseline = tmp_path / "baseline"
+    workspace = tmp_path / "workspace"
+    session_root = tmp_path / "session"
+    for path in (baseline, workspace, session_root):
+        path.mkdir()
+    workspaces = iter(
+        (
+            EvaluationWorkspace(baseline, session_root),
+            EvaluationWorkspace(workspace, session_root),
+        )
+    )
+    captured: dict[str, object] = {}
+
+    class FakeContainer:
+        def __init__(self, image: str, container_workspace: Path) -> None:
+            pass
+
+        @asynccontextmanager
+        async def running(self):
+            yield "container-1"
+
+    class FakeAgentLoop:
+        def __init__(self, *args, **kwargs) -> None:
+            captured.update(kwargs)
+
+        async def run(self, *args, **kwargs) -> AgentRunResult:
+            store = captured["artifact_store"]
+            captured["artifact_id"] = store.save(
+                "stored body",
+                session_id=captured["session_id"],
+                source_tool="run_command",
+            )
+            return AgentRunResult((), "完成", stop_reason="completed", tool_rounds=1)
+
+    class FakeTimedClient:
+        requests: list = []
+        durations_ms: list[float] = []
+        total_actual_tokens = None
+        total_cached_tokens = None
+        cache_hit_rate = None
+
+        def __init__(self, client) -> None:
+            pass
+
+        async def close(self) -> None:
+            pass
+
+    task = SwebenchTask(
+        "example__1",
+        "example/repo",
+        "base",
+        "issue",
+        "swebench-lite",
+        "sweb.eval.example__1",
+    )
+    monkeypatch.setattr("evaluation.swebench.prepare_repository", lambda *args: tmp_path)
+    monkeypatch.setattr(
+        "evaluation.swebench.prepare_evaluation_workspace", lambda *args: next(workspaces)
+    )
+    monkeypatch.setattr("evaluation.swebench.SwebenchTaskContainer", FakeContainer)
+    monkeypatch.setattr("evaluation.swebench.AgentLoop", FakeAgentLoop)
+    monkeypatch.setattr("evaluation.swebench.OpenAICompatibleClient", lambda settings: object())
+    monkeypatch.setattr("evaluation.swebench.TimedModelClient", FakeTimedClient)
+    monkeypatch.setattr(
+        "evaluation.swebench.load_settings", _fake_settings
+    )
+    monkeypatch.setattr(
+        "evaluation.swebench.create_patch", lambda *args: (("file.py",), "patch")
+    )
+    monkeypatch.setattr(
+        "evaluation.swebench.verify_patch", lambda *args: HarnessResult(True)
+    )
+
+    result = await run_task(task, tmp_path / "result", "python")
+
+    assert captured["session_id"]
+    store = ArtifactStore.for_workspace(session_root)
+    store.set_session_id(captured["session_id"])
+    assert store.load(captured["artifact_id"]) is not None
+    assert result.passed

@@ -1,0 +1,7 @@
+ripgrep 14.1.1 (rev 4649aa9700)
+
+features:+pcre2
+simd(compile):+SSE2,-SSSE3,-AVX2
+simd(runtime):+SSE2,+SSSE3,+AVX2
+
+PCRE2 10.43 is available (JIT is available)

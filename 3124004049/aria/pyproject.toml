@@ -1,0 +1,30 @@
+[project]
+name = "aria"
+version = "0.1.0"
+description = "一个简洁、可扩展的 Coding Agent"
+requires-python = ">=3.11"
+dependencies = [
+    "openai>=1.0.0,<2.0.0",
+    "prompt-toolkit>=3.0.0,<4.0.0",
+    "pygments>=2.20.0",
+]
+
+[build-system]
+requires = ["hatchling>=1.27.0,<2.0.0"]
+build-backend = "hatchling.build"
+
+[project.scripts]
+aria = "core.main:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/core"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0,<9.0.0",
+    "pytest-asyncio>=0.23.0,<1.0.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = [".", "src"]
+testpaths = ["tests"]

@@ -1,0 +1,11 @@
+usage: aria [-h] [--config CONFIG] {resume} ...
+
+Start aria
+
+positional arguments:
+  {resume}
+    resume         Resume a previous session
+
+options:
+  -h, --help       show this help message and exit
+  --config CONFIG  Use a specific config file and skip first-run setup
