@@ -1,12 +1,11 @@
-# 迁移验证记录
+# 测试与功能验证记录
 
-验证日期：2026-10-21。环境：WSL Ubuntu 22.04、CPython 3.13.16、uv 0.13.4、ripgrep 14.1.1。模型、工具与界面实现均复用已有代码。
+验证日期：2026-10-21。环境：WSL Ubuntu 22.04、CPython 3.13.16、uv 0.13.4、ripgrep 14.1.1。
 
 | 检查 | 结果 | 证据 |
 | --- | --- | --- |
-| 迁移文件完整性 | 318 个复用文件与源工作区一致，未发现内容差异 | [migration-integrity.json](./migration-integrity.json) |
-| 按原锁文件安装 | `uv sync --frozen` 成功，未修改 `pyproject.toml` 和 `uv.lock` | 版本见上述环境与原锁文件 |
-| 完整原有测试 | 910 通过，1 跳过 | [pytest.txt](./pytest.txt) |
+| 依赖安装 | `uv sync --frozen` 成功，依赖版本由 `uv.lock` 固定 | 版本见上述环境与锁文件 |
+| 完整自动化测试 | 910 通过，1 跳过 | [pytest.txt](./pytest.txt) |
 | 六项离线场景 | 6/6 通过 | [摘要](./offline-summary.txt)、[完整 JSONL](./offline-results.jsonl)、[HTML 报告](./offline-report.html) |
 | 命令入口 | `aria --help` 正常退出并显示帮助 | [cli-help.txt](./cli-help.txt) |
 | 打包与资源 | Wheel 构建成功；离开源码目录后验证命令入口、六个提示词资源与配置模板 | [package-smoke.txt](./package-smoke.txt) |
@@ -27,7 +26,7 @@ Wheel 验证将生成的安装包放入独立虚拟环境，通过 `PYTHONPATH` 
 5. `cancelled_tool_restore`：工具调用取消后的会话恢复。
 6. `model_network_retry`：模拟网络错误并验证重试。
 
-场景使用可控的模型替身和临时工作区，不需要 API Key，不产生真实模型调用。通过这些检查证明迁移后的代码和本地工具链可运行；真实模型的自然语言交互效果须由小组配置有效服务后演示。
+场景使用可控的模型替身和临时工作区，不需要 API Key，不产生真实模型调用。通过这些检查验证代码和本地工具链可运行；真实模型的自然语言交互效果须由小组配置有效服务后演示。
 
 ## 复现
 

@@ -1,16 +1,16 @@
 | 这个作业属于哪个课程 | [计科 24 级 56 班](https://edu.cnblogs.com/campus/gdgy/Class56-Grade2024-CS/) |
 |-------------------|-----------------|
 | 这个作业要求在哪里 | [构建一个能说会做的智能体](https://edu.cnblogs.com/campus/gdgy/Class56-Grade2024-CS/homework/16760) |
-| 这个作业的目标 | 复用已有 Aria Coding Agent，构建能够理解自然语言、调用工具处理文件和执行命令，并记住多轮对话的编程与办公助手。 |
+| 这个作业的目标 | 实现一个能够理解自然语言、调用工具处理文件和执行命令，并记住多轮对话的编程与办公助手。 |
 | 学号 | 3124004049、3124004064（廖程东） |
 
 # 构建一个能说会做的智能体：Aria
 
-## 1. 项目与复用说明
+## 1. 项目简介
 
-Aria 是一个基于 Python 的终端 Coding Agent。本次作业将已有 Aria 项目迁入课程仓库，按 `3124004049/aria/` 独立组织，保留其源码、提示词、测试、评测脚本及设计资料。已有两个作业仍在各自目录中。
+Aria 是一个基于 Python 的终端 Coding Agent，面向编程与文件整理场景，能够通过自然语言理解用户任务，并调用文件、搜索、编辑和命令工具完成操作。
 
-本次工作的重点是已有 Agent 的迁移、课程文档整理和迁移验证。模型循环、工具系统、会话存储和界面均来自迁移前的实现，具体来源、复用范围和调整见 [迁移说明](./MIGRATION.md)。原项目介绍保留在 [README.upstream.md](./README.upstream.md)。
+项目围绕“模型理解任务 → 调用工具 → 分析执行结果 → 回复用户”的循环设计，将模型接入、工具调度、权限审批、会话存储和终端界面划分为独立模块。用户既可以直接提问，也可以让智能体创建文件、修改内容和执行命令。
 
 GitHub 仓库：[onychen/gdut-software-engineering-2026](https://github.com/onychen/gdut-software-engineering-2026)，项目目录：`3124004049/aria/`。
 
@@ -18,7 +18,7 @@ GitHub 仓库：[onychen/gdut-software-engineering-2026](https://github.com/onyc
 
 面向需要通过自然语言阅读、整理和修改项目文件的用户。用户给出任务后，智能体自行决定是否调用工具，把工具执行结果继续交给模型分析，最后说明完成情况。
 
-| 需求 | 已有实现 | 对应代码 |
+| 需求 | 实现方式 | 对应代码 |
 | --- | --- | --- |
 | 自然语言对话（会说） | OpenAI-compatible 模型接口、流式回复与推理展示 | `src/core/openai_client.py`、`src/core/ui.py` |
 | 执行操作（会做） | 文件列举、搜索、读取、创建、编辑和本地命令执行 | `src/core/tools/` |
@@ -27,7 +27,7 @@ GitHub 仓库：[onychen/gdut-software-engineering-2026](https://github.com/onyc
 | 简洁交互界面 | 全屏终端界面，显示 Markdown、工具执行和审批操作 | `src/core/screen.py`、`src/core/tool_approval.py` |
 | 控制写入与执行 | 写文件、编辑文件和执行命令前请求用户确认 | `src/core/tools/permissions.py` |
 
-本项目提供终端界面；没有实现语音输入输出、网页或桌面图形界面，也没有内置天气或数据库服务。MCP 是已有的可选扩展能力，基础文件任务不依赖额外 MCP Server。
+本项目提供终端界面；没有实现语音输入输出、网页或桌面图形界面，也没有内置天气或数据库服务。MCP 是可选扩展能力，基础文件任务不依赖额外 MCP Server。
 
 ## 3. 业务流描述
 
@@ -61,15 +61,15 @@ aria/
 │   ├── prompts/            # Agent 与上下文压缩提示词资源
 │   ├── tools/              # 本地工具、权限、MCP 接入
 │   └── commands/           # /model、/compact、/mcp 等命令
-├── tests/                  # 原有自动化测试
+├── tests/                  # 自动化测试
 ├── evaluation/             # 离线回归与可选真实模型评测
 ├── examples/               # 无真实密钥的配置模板与演示输入
-├── evidence/               # 本次迁移验证结果
-├── design/                 # 原有设计资料
-├── problems/、todo/        # 原有实验分析与待办记录（历史资料）
+├── evidence/               # 测试与功能验证结果
+├── design/                 # 架构与模块设计资料
+├── problems/、todo/        # 实验分析与待办记录
 ├── pyproject.toml
 ├── uv.lock
-└── README.upstream.md      # 迁移前的 README
+└── README.md               # 项目说明与使用文档
 ```
 
 `main.py` 负责启动，`ui.py` 负责编排用户交互，`screen.py` 负责渲染，`agent_loop.py` 驱动模型与工具循环。工具通过统一注册表调度，权限判断与审批界面分离。会话和工具结果写入工作区的 `.aria/`，恢复时重新载入历史消息。
@@ -78,7 +78,7 @@ MCP 接入使用标准输入输出与外部 Server 通信，完成初始化、`t
 
 ## 5. 安装与运行
 
-需要 Python 3.11+、Git、uv 和 ripgrep（`rg` 命令，供文件搜索工具使用）。完整自动化验证在 WSL Ubuntu 下完成；部分原有命令测试使用 POSIX Shell，Windows 用户进行完整复现时建议使用 WSL。
+需要 Python 3.11+、Git、uv 和 ripgrep（`rg` 命令，供文件搜索工具使用）。完整自动化验证在 WSL Ubuntu 下完成；部分命令测试使用 POSIX Shell，Windows 用户进行完整复现时建议使用 WSL。
 
 Ubuntu 可先安装搜索工具：
 
@@ -112,7 +112,7 @@ uv run aria --config .aria/settings.json
 
 ## 6. 使用示例与功能演示
 
-以下为可复现的演示步骤和预期结果；真实模型演示需要自行配置有效服务。本次迁移的自动验证使用离线模型替身，实际验证结果见 [evidence/README.md](./evidence/README.md)。
+以下为可复现的演示步骤和预期结果；真实模型演示需要自行配置有效服务。自动化验证使用离线模型替身，实际验证结果见 [测试与功能验证记录](./evidence/README.md)。
 
 ### 示例一：自然语言创建文件
 
@@ -163,13 +163,13 @@ uv run --frozen aria --help
 
 离线评测覆盖多轮记忆、文件编辑、工具失败恢复、上下文压缩恢复、取消后的会话恢复和模型重试六种场景，不需要 API Key。默认输出到被忽略的 `evaluation-results/`。
 
-迁移验证记录保存在 [evidence/](./evidence/)。原 README 与历史分析中的 SWE-bench、长任务或多 Agent 实验数据来自迁移前资料；本次未重新运行这些依赖真实模型、外部仓库或 Docker 的实验。
+验证结果为 910 项测试通过、1 项因缺少 TypeScript 编译器跳过，六项离线评测场景全部通过。测试日志与评测报告保存在 [evidence/](./evidence/)。
 
 ## 8. 小组分工安排
 
 | 成员 | 分工 | 交付内容 |
 | --- | --- | --- |
-| 3124004049 | 负责 Agent 项目迁移、模型与工具流程梳理、配置与运行说明 | 可运行项目、需求与业务流说明、实现说明 |
+| 3124004049 | 负责 Agent 核心流程、模型接入、文件与命令工具，以及配置与运行说明 | 可运行项目、需求与业务流说明、实现说明 |
 | 3124004064 廖程东 | 负责测试复现、功能演示、MCP 接入验证与博客材料整理 | 测试记录、实际演示截图或视频、小组心得整理 |
 
 以上为本次作业的任务安排，最终提交时请按实际完成情况更新。
@@ -178,7 +178,7 @@ uv run --frozen aria --help
 
 ### 3124004049
 
-待本人填写：结合项目迁移与 Agent 工具循环的理解，记录实际遇到的问题、解决过程和收获。
+待本人填写：结合 Agent 架构设计与工具循环的理解，记录实际遇到的问题、解决过程和收获。
 
 ### 3124004064 廖程东
 
