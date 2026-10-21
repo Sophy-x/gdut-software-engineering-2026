@@ -1,0 +1,38 @@
+{
+  "date": "2026-10-21",
+  "source": "F:\\code\\aria-main",
+  "destination": "3124004049/aria",
+  "method": "SHA-256 comparison of every reused file; exact byte comparison of dependency files and original README",
+  "verified_files": 318,
+  "components": {
+    "src": {
+      "files": 84,
+      "sha256_of_sorted_path_and_content_hashes": "41f9844bc626a8aa81cefd32b02ce1628c1e9e373194ac6fe88e9602e6789f39"
+    },
+    "tests": {
+      "files": 85,
+      "sha256_of_sorted_path_and_content_hashes": "1f3e1ea7c824d70f3d5359ef61d6df149e93dc5dd5da00c54eca62e8522e93df"
+    },
+    "evaluation": {
+      "files": 29,
+      "sha256_of_sorted_path_and_content_hashes": "f4d0e3d92c474db414b39dcb5e400b4e2f83a0b6490e9a0c388339edec6f1ef7"
+    },
+    "design": {
+      "files": 11,
+      "sha256_of_sorted_path_and_content_hashes": "1671627ab4f952994e94915db1a16326b0e88d039a003ad5c789d1e994836b41"
+    },
+    "problems": {
+      "files": 74,
+      "sha256_of_sorted_path_and_content_hashes": "a5736965c26e0c58e62101d90703bae831413ad97ebf100747865d02490cc75d"
+    },
+    "todo": {
+      "files": 32,
+      "sha256_of_sorted_path_and_content_hashes": "ab5f4e938df4a3f207467fbf96adaedc11e8083c3e9db4ee5d14deff2db5f256"
+    }
+  },
+  "differences": [],
+  "intentional_changes": [
+    ".gitignore: ignore generated demonstration TODO.md"
+  ],
+  "passed": true
+}

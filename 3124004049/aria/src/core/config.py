@@ -1,0 +1,583 @@
+"""加载并校验 aria 的运行配置。"""
+
+import json
+from dataclasses import dataclass
+from pathlib import Path
+from urllib.parse import urlparse
+
+
+class ConfigError(ValueError):
+    """配置文件缺失或配置项不合法时抛出的异常。"""
+
+
+@dataclass(frozen=True)
+class McpStdioSettings:
+    """描述一个可选 stdio MCP Provider 的启动配置。"""
+
+    command: str
+    arguments: tuple[str, ...]
+    provider_id: str
+    trusted_read_tools: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class ModelPrice:
+    """模型每百万 token 的美元单价，cache_read 缺省时视为无缓存计费。"""
+
+    input: float
+    output: float
+    cache_read: float | None = None
+    cache_write: float | None = None
+
+
+@dataclass(frozen=True)
+class Settings:
+    """模型客户端运行所需的最小配置。"""
+
+    base_url: str
+    model_name: str
+    api_key: str
+    context_window: int | None = None
+    reserve_tokens: int = 16_000
+    keep_recent_tokens: int = 20_000
+    request_timeout_seconds: float = 120.0
+    first_byte_timeout_seconds: float | None = None
+    stream_idle_timeout_seconds: float | None = None
+    mcp_stdio: McpStdioSettings | None = None
+    stream_usage: bool = True
+    max_tool_rounds: int | None = None
+    price: ModelPrice | None = None
+    # 工具输出防火墙：超阈值输出原文落盘并注入有界占位符（默认开）
+    firewall_enabled: bool = True
+    # 陈旧工具输出批量驱逐：估算越过阈值时一次性降级为 artifact 占位符
+    # （默认关，评测 B' 档与生产显式开启）
+    eviction_enabled: bool = False
+    # 驱逐阈值，缺省使用压缩阈值的一半；长任务评测可调低以强制触发
+    eviction_threshold_tokens: int | None = None
+    # Worker 工作区隔离默认关闭；开启时要求当前目录是干净的 Git 检出。
+    isolation_enabled: bool = False
+    worker_max_concurrency: int = 4
+    # 提示缓存键：仅对支持该参数的 provider 透传（DeepSeek 前缀缓存自动，不写请求体）
+    prompt_cache_key: str | None = None
+    # 完成门（Completion Gate）：用独立验证器否决模型的完成声明（默认开）
+    completion_gate_enabled: bool = True
+    completion_gate_max_rejections: int = 2
+    completion_gate_verifier_timeout_seconds: float = 60.0
+    completion_gate_verifier_token_budget: int = 100_000
+    completion_gate_verifier_thinking: str = "high"
+    completion_gate_no_tool_nudge_rounds: int = 3
+    # 子 Agent 的默认上下文模式：scout/worker/reviewer 各自可配
+    subagent_scout_mode: str = "fresh"
+    subagent_worker_mode: str = "fork"
+    subagent_reviewer_mode: str = "fresh"
+    # Agent 空转检测与纠偏：重复工具调用或长期无进展时注入系统提醒（默认开）
+    loop_guard_enabled: bool = True
+    loop_guard_thresholds: tuple[int, ...] = (3, 5, 8)
+    loop_guard_exempt_tools: tuple[str, ...] = ()
+    loop_guard_no_progress_rounds: int = 8
+
+    def __post_init__(self) -> None:
+        """统一超时默认值并校验直接构造的配置。"""
+
+        first_byte_timeout = (
+            self.request_timeout_seconds
+            if self.first_byte_timeout_seconds is None
+            else self.first_byte_timeout_seconds
+        )
+        stream_idle_timeout = (
+            self.request_timeout_seconds
+            if self.stream_idle_timeout_seconds is None
+            else self.stream_idle_timeout_seconds
+        )
+        for name, value in (
+            ("request_timeout_seconds", self.request_timeout_seconds),
+            ("first_byte_timeout_seconds", first_byte_timeout),
+            ("stream_idle_timeout_seconds", stream_idle_timeout),
+        ):
+            if value <= 0:
+                raise ConfigError(f"{name} must be > 0")
+        if self.max_tool_rounds is not None and self.max_tool_rounds <= 0:
+            raise ConfigError("max_tool_rounds must be > 0")
+        if self.worker_max_concurrency <= 0:
+            raise ConfigError("worker_max_concurrency must be > 0")
+        if (
+            self.eviction_threshold_tokens is not None
+            and self.eviction_threshold_tokens <= 0
+        ):
+            raise ConfigError("eviction_threshold_tokens must be > 0")
+        previous_threshold = 0
+        for threshold in self.loop_guard_thresholds:
+            if threshold <= previous_threshold:
+                raise ConfigError(
+                    "loop_guard.thresholds must be strictly increasing positive ints"
+                )
+            previous_threshold = threshold
+        if not self.loop_guard_thresholds:
+            raise ConfigError("loop_guard.thresholds must not be empty")
+        if self.loop_guard_no_progress_rounds < 0:
+            raise ConfigError("loop_guard.no_progress_rounds must be >= 0")
+        if self.completion_gate_max_rejections < 0:
+            raise ConfigError("completion_gate.max_rejections must be >= 0")
+        if self.completion_gate_verifier_timeout_seconds <= 0:
+            raise ConfigError("completion_gate.verifier_timeout_seconds must be > 0")
+        if self.completion_gate_verifier_token_budget <= 0:
+            raise ConfigError("completion_gate.verifier_token_budget must be > 0")
+        if self.completion_gate_no_tool_nudge_rounds < 0:
+            raise ConfigError("completion_gate.no_tool_nudge_rounds must be >= 0")
+        for name, mode in (
+            ("subagent.default_mode.scout", self.subagent_scout_mode),
+            ("subagent.default_mode.worker", self.subagent_worker_mode),
+            ("subagent.default_mode.reviewer", self.subagent_reviewer_mode),
+        ):
+            if mode not in _SPAWN_MODES:
+                raise ConfigError(f"{name} must be one of {_SPAWN_MODES}")
+        object.__setattr__(self, "first_byte_timeout_seconds", first_byte_timeout)
+        object.__setattr__(self, "stream_idle_timeout_seconds", stream_idle_timeout)
+
+
+def load_settings(
+    project_dir: Path | None = None,
+    user_config_path: Path | None = None,
+) -> Settings:
+    """从用户级与项目级 settings.json 读取配置并完成基础校验。
+
+    用户级配置（~/.aria/settings.json）提供默认值；项目级配置
+    （<项目目录>/.aria/settings.json）按字段覆盖用户级配置。
+    """
+
+    user_path = (user_config_path or default_user_config_path()).resolve()
+    if not user_path.is_file():
+        raise ConfigError(
+            f"User config not found: {user_path}\n"
+            "Run aria to set up, or create the file manually"
+        )
+    merged_data = _read_config_json(user_path)
+    project_path = _project_config_path(project_dir)
+    if project_path.is_file():
+        merged_data = _merge_configs(merged_data, _read_config_json(project_path))
+    return _settings_from_data(merged_data)
+
+
+def default_user_config_path() -> Path:
+    """返回用户级配置的默认位置。"""
+
+    return Path.home() / ".aria" / "settings.json"
+
+
+def _project_config_path(project_dir: Path | None) -> Path:
+    """返回项目级配置的位置，未指定项目目录时使用当前工作目录。"""
+
+    root = (project_dir or Path.cwd()).resolve()
+    return root / ".aria" / "settings.json"
+
+
+def _read_config_json(path: Path) -> dict:
+    """读取并解析 settings.json，非法 JSON 或非对象时报配置错误。"""
+
+    try:
+        content = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ConfigError(f"Failed to read config file: {path}") from exc
+    try:
+        data = json.loads(content)
+    except json.JSONDecodeError as exc:
+        raise ConfigError(f"Config file is not valid JSON: {path}") from exc
+    if not isinstance(data, dict):
+        raise ConfigError(f"Config file must be a JSON object: {path}")
+    return data
+
+
+def _merge_configs(user_data: dict, project_data: dict) -> dict:
+    """项目级配置按字段覆盖用户级配置，null 字段表示未设置不参与覆盖。"""
+
+    merged = dict(user_data)
+    project_model = project_data.get("model")
+    if isinstance(project_model, dict):
+        user_model = merged.get("model")
+        if not isinstance(user_model, dict):
+            user_model = {}
+        merged["model"] = {
+            **user_model,
+            **{name: value for name, value in project_model.items() if value is not None},
+        }
+    if "mcp_stdio" in project_data and project_data["mcp_stdio"] is not None:
+        merged["mcp_stdio"] = project_data["mcp_stdio"]
+    if "isolation_enabled" in project_data and project_data["isolation_enabled"] is not None:
+        merged["isolation_enabled"] = project_data["isolation_enabled"]
+    if "worker_max_concurrency" in project_data and project_data["worker_max_concurrency"] is not None:
+        merged["worker_max_concurrency"] = project_data["worker_max_concurrency"]
+    return merged
+
+
+def _settings_from_data(data: dict) -> Settings:
+    """从合并后的配置字典构造 Settings，并完成必填项与取值校验。"""
+
+    model = data.get("model")
+    if not isinstance(model, dict):
+        raise ConfigError("model must be an object")
+    base_url = _required_value(model.get("base_url"), "model.base_url")
+    model_name = _required_value(model.get("model_name"), "model.model_name")
+    api_key = _required_value(model.get("api_key"), "model.api_key")
+    context_window = _optional_int(
+        model.get("context_window"),
+        None,
+        "model.context_window",
+    )
+    reserve_tokens = _optional_int(
+        model.get("reserve_tokens"),
+        16_000,
+        "model.reserve_tokens",
+    )
+    keep_recent_tokens = _optional_int(
+        model.get("keep_recent_tokens"),
+        20_000,
+        "model.keep_recent_tokens",
+    )
+    request_timeout_seconds = _optional_float(
+        model.get("request_timeout_seconds"),
+        120.0,
+        "model.request_timeout_seconds",
+    )
+    first_byte_timeout_seconds = _optional_float(
+        model.get("first_byte_timeout_seconds"),
+        None,
+        "model.first_byte_timeout_seconds",
+    )
+    stream_idle_timeout_seconds = _optional_float(
+        model.get("stream_idle_timeout_seconds"),
+        None,
+        "model.stream_idle_timeout_seconds",
+    )
+    stream_usage = _optional_bool(
+        model.get("stream_usage"),
+        True,
+        "model.stream_usage",
+    )
+    firewall_enabled = _optional_bool(
+        model.get("firewall_enabled"),
+        True,
+        "model.firewall_enabled",
+    )
+    eviction_enabled = _optional_bool(
+        model.get("eviction_enabled"),
+        False,
+        "model.eviction_enabled",
+    )
+    eviction_threshold_tokens = _optional_int(
+        model.get("eviction_threshold_tokens"),
+        None,
+        "model.eviction_threshold_tokens",
+    )
+    max_tool_rounds = _optional_int(
+        model.get("max_tool_rounds"),
+        None,
+        "model.max_tool_rounds",
+    )
+    isolation_enabled = _optional_bool(
+        data.get("isolation_enabled"), False, "isolation_enabled"
+    )
+    worker_max_concurrency = _optional_int(
+        data.get("worker_max_concurrency"), 4, "worker_max_concurrency"
+    )
+    (
+        loop_guard_enabled,
+        loop_guard_thresholds,
+        loop_guard_exempt_tools,
+        loop_guard_no_progress_rounds,
+    ) = _loop_guard_settings(data)
+    prompt_cache_key = _optional_str(
+        model.get("prompt_cache_key"), None, "model.prompt_cache_key"
+    )
+    (
+        subagent_scout_mode,
+        subagent_worker_mode,
+        subagent_reviewer_mode,
+    ) = _subagent_settings(data)
+    (
+        completion_gate_enabled,
+        completion_gate_max_rejections,
+        completion_gate_verifier_timeout_seconds,
+        completion_gate_verifier_token_budget,
+        completion_gate_verifier_thinking,
+        completion_gate_no_tool_nudge_rounds,
+    ) = _completion_gate_settings(data)
+    price = _optional_model_price(model.get("price"))
+    if context_window is not None and context_window <= 0:
+        raise ConfigError("model.context_window must be > 0")
+    if reserve_tokens < 0:
+        raise ConfigError("model.reserve_tokens must be >= 0")
+    if context_window is not None and reserve_tokens >= context_window:
+        raise ConfigError("model.reserve_tokens must be < model.context_window")
+    if keep_recent_tokens <= 0:
+        raise ConfigError("model.keep_recent_tokens must be > 0")
+    _validate_base_url(base_url)
+
+    return Settings(
+        base_url=base_url,
+        model_name=model_name,
+        api_key=api_key,
+        context_window=context_window,
+        reserve_tokens=reserve_tokens,
+        keep_recent_tokens=keep_recent_tokens,
+        request_timeout_seconds=request_timeout_seconds,
+        first_byte_timeout_seconds=first_byte_timeout_seconds,
+        stream_idle_timeout_seconds=stream_idle_timeout_seconds,
+        mcp_stdio=_optional_mcp_stdio_settings(data),
+        stream_usage=stream_usage,
+        max_tool_rounds=max_tool_rounds,
+        price=price,
+        firewall_enabled=firewall_enabled,
+        eviction_enabled=eviction_enabled,
+        eviction_threshold_tokens=eviction_threshold_tokens,
+        isolation_enabled=isolation_enabled,
+        worker_max_concurrency=worker_max_concurrency,
+        loop_guard_enabled=loop_guard_enabled,
+        loop_guard_thresholds=loop_guard_thresholds,
+        loop_guard_exempt_tools=loop_guard_exempt_tools,
+        loop_guard_no_progress_rounds=loop_guard_no_progress_rounds,
+        prompt_cache_key=prompt_cache_key,
+        subagent_scout_mode=subagent_scout_mode,
+        subagent_worker_mode=subagent_worker_mode,
+        subagent_reviewer_mode=subagent_reviewer_mode,
+        completion_gate_enabled=completion_gate_enabled,
+        completion_gate_max_rejections=completion_gate_max_rejections,
+        completion_gate_verifier_timeout_seconds=completion_gate_verifier_timeout_seconds,
+        completion_gate_verifier_token_budget=completion_gate_verifier_token_budget,
+        completion_gate_verifier_thinking=completion_gate_verifier_thinking,
+        completion_gate_no_tool_nudge_rounds=completion_gate_no_tool_nudge_rounds,
+    )
+
+
+def _optional_model_price(value: object) -> ModelPrice | None:
+    """解析可选的 model.price 配置，缺省返回 None。"""
+
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ConfigError("model.price must be an object")
+    input_price = value.get("input")
+    output_price = value.get("output")
+    if not isinstance(input_price, (int, float)) or not isinstance(
+        output_price, (int, float)
+    ):
+        raise ConfigError("model.price.input and model.price.output are required")
+    cache_read = value.get("cache_read")
+    cache_write = value.get("cache_write")
+    return ModelPrice(
+        input=float(input_price),
+        output=float(output_price),
+        cache_read=float(cache_read) if isinstance(cache_read, (int, float)) else None,
+        cache_write=float(cache_write) if isinstance(cache_write, (int, float)) else None,
+    )
+
+
+def _required_value(value: object, name: str) -> str:
+    """读取必填配置项，避免把空配置传给模型客户端。"""
+
+    if not isinstance(value, str) or not value.strip():
+        raise ConfigError(f"Missing required setting: {name}")
+    return value.strip()
+
+
+def _optional_int(value: object, default: int, name: str) -> int:
+    """读取可选整数配置，未设置时使用默认值。"""
+
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise ConfigError(f"{name} must be an integer") from exc
+
+
+def _optional_float(
+    value: object,
+    default: float | None,
+    name: str,
+) -> float | None:
+    """读取可选小数配置，未设置时使用默认值。"""
+
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError) as exc:
+        raise ConfigError(f"{name} must be a number") from exc
+
+
+def _optional_bool(value: object, default: bool, name: str) -> bool:
+    """读取可选布尔配置，未设置时使用默认值。"""
+
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "on"}:
+            return True
+        if normalized in {"false", "0", "no", "off"}:
+            return False
+    raise ConfigError(f"{name} must be a boolean")
+
+
+def _optional_int_tuple(
+    value: object,
+    default: tuple[int, ...],
+    name: str,
+) -> tuple[int, ...]:
+    """读取可选整数数组配置，未设置时使用默认值。"""
+
+    if value is None:
+        return default
+    if not isinstance(value, list) or not all(
+        isinstance(item, int) and not isinstance(item, bool) for item in value
+    ):
+        raise ConfigError(f"{name} must be an array of integers")
+    return tuple(value)
+
+
+def _optional_str_tuple(
+    value: object,
+    default: tuple[str, ...],
+    name: str,
+) -> tuple[str, ...]:
+    """读取可选字符串数组配置，未设置时使用默认值。"""
+
+    if value is None:
+        return default
+    if not isinstance(value, list) or not all(
+        isinstance(item, str) and item for item in value
+    ):
+        raise ConfigError(f"{name} must be an array of strings")
+    return tuple(value)
+
+
+def _optional_str(value: object, default: str | None, name: str) -> str | None:
+    """读取可选字符串配置，未设置时使用默认值。"""
+
+    if value is None:
+        return default
+    if not isinstance(value, str):
+        raise ConfigError(f"{name} must be a string")
+    return value
+
+
+def _loop_guard_settings(
+    data: dict,
+) -> tuple[bool, tuple[int, ...], tuple[str, ...], int]:
+    """读取可选的 loop_guard 嵌套配置。"""
+
+    raw = data.get("loop_guard")
+    if raw is None:
+        return True, (3, 5, 8), (), 8
+    if not isinstance(raw, dict):
+        raise ConfigError("loop_guard must be an object")
+    return (
+        _optional_bool(raw.get("enabled"), True, "loop_guard.enabled"),
+        _optional_int_tuple(raw.get("thresholds"), (3, 5, 8), "loop_guard.thresholds"),
+        _optional_str_tuple(raw.get("exempt_tools"), (), "loop_guard.exempt_tools"),
+        _optional_int(
+            raw.get("no_progress_rounds"),
+            8,
+            "loop_guard.no_progress_rounds",
+        ),
+    )
+
+
+# 子 Agent 上下文模式的合法取值；与 core.subagent.SPAWN_MODES 一致，有测试守住漂移
+_SPAWN_MODES = ("fresh", "fork", "fork_last_n")
+
+
+def _completion_gate_settings(
+    data: dict,
+) -> tuple[bool, int, float, int, str, int]:
+    """读取可选的 completion_gate 嵌套配置。"""
+
+    raw = data.get("completion_gate")
+    if raw is None:
+        return True, 2, 60.0, 100_000, "high", 3
+    if not isinstance(raw, dict):
+        raise ConfigError("completion_gate must be an object")
+    return (
+        _optional_bool(raw.get("enabled"), True, "completion_gate.enabled"),
+        _optional_int(raw.get("max_rejections"), 2, "completion_gate.max_rejections"),
+        _optional_float(
+            raw.get("verifier_timeout_seconds"),
+            60.0,
+            "completion_gate.verifier_timeout_seconds",
+        ),
+        _optional_int(
+            raw.get("verifier_token_budget"),
+            100_000,
+            "completion_gate.verifier_token_budget",
+        ),
+        _optional_str(
+            raw.get("verifier_thinking"), "high", "completion_gate.verifier_thinking"
+        )
+        or "high",
+        _optional_int(
+            raw.get("no_tool_nudge_rounds"),
+            3,
+            "completion_gate.no_tool_nudge_rounds",
+        ),
+    )
+
+
+def _subagent_settings(data: dict) -> tuple[str, str, str]:
+    """读取可选的 subagent.default_mode 配置，返回按角色默认模式。"""
+
+    raw = data.get("subagent")
+    if raw is None:
+        return "fresh", "fork", "fresh"
+    if not isinstance(raw, dict):
+        raise ConfigError("subagent must be an object")
+    default_mode = raw.get("default_mode")
+    if default_mode is None:
+        return "fresh", "fork", "fresh"
+    if not isinstance(default_mode, dict):
+        raise ConfigError("subagent.default_mode must be an object")
+    scout = _optional_str(default_mode.get("scout"), "fresh", "subagent.default_mode.scout")
+    worker = _optional_str(default_mode.get("worker"), "fork", "subagent.default_mode.worker")
+    reviewer = _optional_str(
+        default_mode.get("reviewer"), "fresh", "subagent.default_mode.reviewer"
+    )
+    return scout or "fresh", worker or "fork", reviewer or "fresh"
+
+
+def _optional_mcp_stdio_settings(data: dict) -> McpStdioSettings | None:
+    """读取可选 stdio MCP 配置，并校验参数数组。"""
+
+    mcp = data.get("mcp_stdio")
+    if mcp is None:
+        return None
+    if not isinstance(mcp, dict):
+        raise ConfigError("mcp_stdio must be an object")
+    command = mcp.get("command")
+    arguments = mcp.get("arguments")
+    provider_id = mcp.get("provider_id")
+    trusted_read_tools = mcp.get("trusted_read_tools", [])
+    if all(value is None for value in (command, arguments, provider_id)):
+        return None
+    if not isinstance(arguments, list) or not all(
+        isinstance(argument, str) for argument in arguments
+    ):
+        raise ConfigError("mcp_stdio.arguments must be an array of strings")
+    if not isinstance(trusted_read_tools, list) or not all(
+        isinstance(tool_name, str) and tool_name for tool_name in trusted_read_tools
+    ):
+        raise ConfigError("mcp_stdio.trusted_read_tools must be an array of strings")
+    return McpStdioSettings(
+        command=_required_value(command, "mcp_stdio.command"),
+        arguments=tuple(arguments),
+        provider_id=_required_value(provider_id, "mcp_stdio.provider_id"),
+        trusted_read_tools=tuple(trusted_read_tools),
+    )
+
+
+def _validate_base_url(base_url: str) -> None:
+    """确保模型服务地址使用可识别的 HTTP 协议。"""
+
+    parsed_url = urlparse(base_url)
+    if parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
+        raise ConfigError("model.base_url must be a valid http or https URL")

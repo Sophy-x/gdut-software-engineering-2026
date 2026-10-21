@@ -1,0 +1,3 @@
+offline evaluation: 6/6 scenarios passed
+results: evidence/offline-results.jsonl
+report: evidence/offline-report.html

@@ -1,0 +1,10 @@
+{
+  "model": {
+    "base_url": "https://api.example.com/v1",
+    "api_key": "replace-with-your-api-key",
+    "model_name": "replace-with-your-tool-calling-model",
+    "context_window": 128000,
+    "reserve_tokens": 16000,
+    "keep_recent_tokens": 20000
+  }
+}

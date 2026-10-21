@@ -1,0 +1,221 @@
+"""实现第一批只读本地文件工具。"""
+
+import asyncio
+from pathlib import Path
+
+from ..artifacts import ARTIFACT_URL_PREFIX, ArtifactStore
+from ..model import ToolCall, ToolResult
+from .command_executor import terminate_process_group
+from .args import optional_path, optional_positive_integer, string_argument
+from .output_limits import limit_tool_output
+from .path_utils import resolve_workspace_path
+from .types import ToolDefinition, ToolHandler
+
+
+MAX_FILE_READ_BYTES = 1_000_000
+DEFAULT_FILE_READ_LINES = 400
+
+
+def create_read_file_tool(
+    workspace: Path,
+    artifact_store: ArtifactStore | None = None,
+) -> tuple[ToolDefinition, ToolHandler]:
+    """创建读取单个文件的工具，支持 artifact://<id> 引用取回落盘输出。"""
+
+    async def read_file(tool_call: ToolCall) -> ToolResult:
+        path = _resolve_read_path(
+            workspace, string_argument(tool_call, "path"), artifact_store
+        )
+        offset = optional_positive_integer(tool_call, "offset", 1)
+        limit = optional_positive_integer(tool_call, "limit", DEFAULT_FILE_READ_LINES)
+        if not path.is_file():
+            raise ValueError("target is not a file")
+        if path.stat().st_size > MAX_FILE_READ_BYTES:
+            raise ValueError("file exceeds the 1 MB read limit")
+        lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+        if lines and offset > len(lines):
+            raise ValueError(f"offset {offset} exceeds file line count {len(lines)}")
+        selected = lines[offset - 1 : offset - 1 + limit]
+        content = "".join(selected)
+        last_line = offset + len(selected) - 1
+        if last_line < len(lines):
+            content = (
+                f"{content.rstrip()}\n\n"
+                f"[Showing lines {offset}-{last_line} of {len(lines)}. "
+                f"Use offset={last_line + 1} to continue.]"
+            )
+        return ToolResult(
+            call_id=tool_call.call_id,
+            content=limit_tool_output(content),
+        )
+
+    return (
+        ToolDefinition(
+            name="read_file",
+            description=(
+                "Read text lines from a file in the workspace. Use offset and limit "
+                "to read large files in parts. Tool outputs stored as artifacts can "
+                "be read by passing the artifact://<id> reference as path."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"},
+                    "offset": {"type": "integer", "minimum": 1, "default": 1},
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "default": DEFAULT_FILE_READ_LINES,
+                    },
+                },
+                "required": ["path"],
+            },
+            source="local",
+            permission="read",
+            idempotent=True,
+            execution_mode="parallel",
+            capability="file.read",
+        ),
+        read_file,
+    )
+
+
+def _resolve_read_path(
+    workspace: Path,
+    value: str,
+    artifact_store: ArtifactStore | None,
+) -> Path:
+    """把读取目标解析为工作区路径或 artifact 落盘路径。"""
+
+    if not value.startswith(ARTIFACT_URL_PREFIX):
+        return resolve_workspace_path(workspace, value)
+    if artifact_store is None:
+        raise ValueError("artifact references are not available")
+    artifact_id = value[len(ARTIFACT_URL_PREFIX) :].strip().split(" ", 1)[0]
+    if not artifact_id:
+        raise ValueError("artifact reference is missing an id")
+    path = artifact_store.resolve(artifact_id)
+    if path is None:
+        raise ValueError(f"artifact {artifact_id} not found")
+    return path
+
+
+def create_list_files_tool(workspace: Path) -> tuple[ToolDefinition, ToolHandler]:
+    """创建列出目录内容的工具。"""
+
+    async def list_files(tool_call: ToolCall) -> ToolResult:
+        path = resolve_workspace_path(workspace, optional_path(tool_call))
+        if not path.is_dir():
+            raise ValueError("target is not a directory")
+
+        entries = sorted(path.iterdir(), key=lambda item: item.name)
+        content = "\n".join(
+            f"{entry.name}{'/' if entry.is_dir() else ''}" for entry in entries
+        )
+        return ToolResult(
+            call_id=tool_call.call_id,
+            content=limit_tool_output(content) if content else "directory is empty",
+        )
+
+    return (
+        ToolDefinition(
+            name="list_files",
+            description="List the direct contents of a directory in the workspace",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "default": "."},
+                },
+            },
+            source="local",
+            permission="read",
+            idempotent=True,
+            execution_mode="parallel",
+            capability="file.read",
+        ),
+        list_files,
+    )
+
+
+def create_search_files_tool(workspace: Path) -> tuple[ToolDefinition, ToolHandler]:
+    """创建在工作区内按文本查找内容的工具。"""
+
+    async def search_files(tool_call: ToolCall) -> ToolResult:
+        pattern = string_argument(tool_call, "pattern")
+        root = resolve_workspace_path(workspace, optional_path(tool_call))
+        if not root.is_dir():
+            raise ValueError(
+                "search path must be an existing directory; use '.' for the workspace root"
+            )
+
+        relative_root = root.relative_to(workspace.resolve())
+        search_path = str(relative_root) if str(relative_root) != "." else "."
+        rg_args = [
+            "rg", "--line-number", "--with-filename", "--color", "never",
+            "--hidden", "--glob", "!.git/**", "--max-columns", "4096",
+            "--max-columns-preview", "--max-filesize", str(MAX_FILE_READ_BYTES),
+        ]
+        gitignore = workspace.resolve() / ".gitignore"
+        if gitignore.is_file():
+            rg_args.extend(("--ignore-file", str(gitignore)))
+        rg_args.extend((pattern, search_path))
+        process = await asyncio.create_subprocess_exec(
+            *rg_args, cwd=workspace.resolve(),
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            start_new_session=True,
+        )
+        matches: list[str] = []
+        try:
+            assert process.stdout is not None
+            while line := await process.stdout.readline():
+                match = line.decode("utf-8", errors="replace").rstrip("\n")
+                if match.startswith("./"):
+                    match = match[2:]
+                file_name, separator, rest = match.partition(":")
+                line_number, separator, text = rest.partition(":")
+                if separator:
+                    match = f"{file_name}:{line_number}: {text}"
+                content = "\n".join([*matches, match])
+                limited = limit_tool_output(content)
+                if limited != content:
+                    await terminate_process_group(process)
+                    return ToolResult(call_id=tool_call.call_id, content=limited)
+                matches.append(match)
+            await process.wait()
+            if process.stderr is not None:
+                await process.stderr.read()
+        except asyncio.CancelledError:
+            await terminate_process_group(process)
+            raise
+        if process.returncode not in (0, 1):
+            assert process.stderr is not None
+            error = (await process.stderr.read()).decode("utf-8", errors="replace").strip()
+            raise ValueError(error or f"rg exited with status {process.returncode}")
+        return ToolResult(
+            call_id=tool_call.call_id,
+            content="\n".join(matches) if matches else "no matching content found",
+        )
+
+    return (
+        ToolDefinition(
+            name="search_files",
+            description=(
+                "Search workspace files by text content. Prefer a task-related path "
+                "such as src/ or tests/; the search respects .gitignore by default."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "pattern": {"type": "string"},
+                    "path": {"type": "string", "default": "."},
+                },
+                "required": ["pattern"],
+            },
+            source="local",
+            permission="read",
+            idempotent=True,
+            execution_mode="parallel",
+            capability="file.read",
+        ),
+        search_files,
+    )

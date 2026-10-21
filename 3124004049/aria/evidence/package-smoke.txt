@@ -1,0 +1,19 @@
+usage: aria [-h] [--config CONFIG] {resume} ...
+
+Start aria
+
+positional arguments:
+  {resume}
+    resume         Resume a previous session
+
+options:
+  -h, --help       show this help message and exit
+  --config CONFIG  Use a specific config file and skip first-run setup
+Installed prompt resource OK: agent
+Installed prompt resource OK: worker
+Installed prompt resource OK: scout
+Installed prompt resource OK: reviewer
+Installed prompt resource OK: context_summary
+Installed prompt resource OK: context_summary_retry
+Example settings validation OK (no model API called)
+Wheel installed in an isolated environment; package imported outside the source tree
