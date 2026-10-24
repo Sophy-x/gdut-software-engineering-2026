@@ -370,6 +370,7 @@ async def run_compaction_restore_scenario(workspace) -> EvaluationResult:
             "恢复后的模型上下文与压缩结果不一致",
         ),
     )
+    restored.close()
     return EvaluationResult(
         scenario=COMPACTION_RESTORE_SCENARIO.name,
         duration_ms=(perf_counter() - started_at) * 1000,

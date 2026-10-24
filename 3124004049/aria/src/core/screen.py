@@ -28,7 +28,6 @@ from prompt_toolkit.layout.containers import (
 )
 from prompt_toolkit.layout.dimension import Dimension
 from prompt_toolkit.filters import Condition
-from prompt_toolkit.output import create_output
 from prompt_toolkit.styles import Style
 from prompt_toolkit.widgets import TextArea
 from wcwidth import wcswidth
@@ -457,7 +456,6 @@ class ChatScreen:
             mouse_support=False,
             cursor=CursorShape.BLINKING_BEAM,
             clipboard=Osc52Clipboard(),
-            output=create_output(),
             min_redraw_interval=1 / 60,
         )
         # prompt-toolkit 显示光标时会关闭终端闪烁，渲染完成后恢复该模式

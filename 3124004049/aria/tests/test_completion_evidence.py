@@ -1,5 +1,6 @@
 """完成门 v2 的证据包与脚本化检查器测试。"""
 
+import sys
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -224,8 +225,10 @@ def test_check_command_passed(tmp_path: Path) -> None:
 
     workspace = _workspace(tmp_path)
 
-    ok = run_checks([{"kind": "command_passed", "command": "true"}], workspace)
-    bad = run_checks([{"kind": "command_passed", "command": "false"}], workspace)
+    ok_command = '"{}" -c "raise SystemExit(0)"'.format(sys.executable)
+    bad_command = '"{}" -c "raise SystemExit(1)"'.format(sys.executable)
+    ok = run_checks([{"kind": "command_passed", "command": ok_command}], workspace)
+    bad = run_checks([{"kind": "command_passed", "command": bad_command}], workspace)
 
     assert ok[0].passed and not bad[0].passed
     assert "exit=1" in bad[0].detail

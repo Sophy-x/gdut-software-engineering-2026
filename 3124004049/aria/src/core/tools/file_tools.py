@@ -5,7 +5,7 @@ from pathlib import Path
 
 from ..artifacts import ARTIFACT_URL_PREFIX, ArtifactStore
 from ..model import ToolCall, ToolResult
-from .command_executor import terminate_process_group
+from .command_executor import process_group_options, terminate_process_group
 from .args import optional_path, optional_positive_integer, string_argument
 from .output_limits import limit_tool_output
 from .path_utils import resolve_workspace_path
@@ -152,6 +152,7 @@ def create_search_files_tool(workspace: Path) -> tuple[ToolDefinition, ToolHandl
         search_path = str(relative_root) if str(relative_root) != "." else "."
         rg_args = [
             "rg", "--line-number", "--with-filename", "--color", "never",
+            "--path-separator", "/",
             "--hidden", "--glob", "!.git/**", "--max-columns", "4096",
             "--max-columns-preview", "--max-filesize", str(MAX_FILE_READ_BYTES),
         ]
@@ -162,13 +163,13 @@ def create_search_files_tool(workspace: Path) -> tuple[ToolDefinition, ToolHandl
         process = await asyncio.create_subprocess_exec(
             *rg_args, cwd=workspace.resolve(),
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-            start_new_session=True,
+            **process_group_options(),
         )
         matches: list[str] = []
         try:
             assert process.stdout is not None
             while line := await process.stdout.readline():
-                match = line.decode("utf-8", errors="replace").rstrip("\n")
+                match = line.decode("utf-8", errors="replace").rstrip("\r\n")
                 if match.startswith("./"):
                     match = match[2:]
                 file_name, separator, rest = match.partition(":")

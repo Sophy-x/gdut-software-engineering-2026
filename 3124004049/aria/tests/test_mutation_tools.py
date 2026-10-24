@@ -1,5 +1,7 @@
 import asyncio
+import os
 import shlex
+import subprocess
 import sys
 from pathlib import Path
 
@@ -37,6 +39,14 @@ def _manager(*tools: tuple) -> ToolManager:
     for definition, handler in tools:
         manager.register_local(definition, handler)
     return manager
+
+
+def _shell_command(arguments: list[str]) -> str:
+    """将参数列表转义为宿主 Shell 命令。"""
+
+    if os.name == "nt":
+        return subprocess.list2cmdline(arguments)
+    return shlex.join(arguments)
 
 
 @pytest.mark.asyncio
@@ -151,7 +161,11 @@ async def test_run_command_returns_stdout_and_exit_error(tmp_path: Path) -> None
     """测试命令工具返回标准输出和非零退出错误。"""
 
     manager = _manager(create_run_command_tool(tmp_path))
-    command = f"{shlex.quote(sys.executable)} -c {shlex.quote('print(\"完成\")')}"
+    output_script = (
+        "import locale,sys; "
+        "sys.stdout.buffer.write('完成'.encode(locale.getpreferredencoding(False)))"
+    )
+    command = _shell_command([sys.executable, "-c", output_script])
     result = await manager.execute(_call("run_command", {"command": command}))
 
     assert result.is_error is False
@@ -164,7 +178,7 @@ async def test_run_command_marks_nonzero_exit_as_error(tmp_path: Path) -> None:
     """测试命令非零退出码会标记为错误。"""
 
     manager = _manager(create_run_command_tool(tmp_path))
-    command = f"{shlex.quote(sys.executable)} -c {shlex.quote('import sys; sys.exit(2)')}"
+    command = _shell_command([sys.executable, "-c", "import sys; sys.exit(2)"])
 
     result = await manager.execute(_call("run_command", {"command": command}))
 
@@ -178,7 +192,7 @@ async def test_run_command_truncates_large_output(tmp_path: Path) -> None:
 
     manager = _manager(create_run_command_tool(tmp_path))
     script = f"print('x' * {MAX_TOOL_OUTPUT_BYTES + 1})"
-    command = f"{shlex.quote(sys.executable)} -c {shlex.quote(script)}"
+    command = _shell_command([sys.executable, "-c", script])
 
     result = await manager.execute(_call("run_command", {"command": command}))
 
@@ -191,7 +205,7 @@ async def test_run_command_returns_timeout_error(tmp_path: Path) -> None:
     """测试命令超时会返回结构化工具错误。"""
 
     manager = _manager(create_run_command_tool(tmp_path, timeout_seconds=0.1))
-    command = f"{shlex.quote(sys.executable)} -c {shlex.quote('import time; time.sleep(1)')}"
+    command = _shell_command([sys.executable, "-c", "import time; time.sleep(1)"])
 
     result = await manager.execute(_call("run_command", {"command": command}))
 
@@ -255,6 +269,9 @@ async def test_run_command_cancellation_stops_process_group(
             self.returncode = 0
             return 0
 
+        def send_signal(self, value: int) -> None:
+            signals.append(value)
+
     process = HangingProcess()
     kwargs: dict[str, object] = {}
     signals: list[int] = []
@@ -264,11 +281,12 @@ async def test_run_command_cancellation_stops_process_group(
         return process
 
     monkeypatch.setattr(command_executor.asyncio, "create_subprocess_shell", create_process)
-    monkeypatch.setattr(
-        command_executor.os,
-        "killpg",
-        lambda process_id, value: signals.append(value),
-    )
+    if command_executor.os.name == "posix":
+        monkeypatch.setattr(
+            command_executor.os,
+            "killpg",
+            lambda process_id, value: signals.append(value),
+        )
     _, handler = create_run_command_tool(tmp_path)
     task = asyncio.create_task(handler(_call("run_command", {"command": "sleep 10"})))
     await process.started.wait()
@@ -277,6 +295,10 @@ async def test_run_command_cancellation_stops_process_group(
     with pytest.raises(asyncio.CancelledError):
         await task
 
-    assert kwargs["start_new_session"] is True
-    assert signals == [command_executor.signal.SIGTERM]
+    if command_executor.os.name == "nt":
+        assert kwargs["creationflags"] == command_executor.subprocess.CREATE_NEW_PROCESS_GROUP
+        assert signals == [command_executor.signal.CTRL_BREAK_EVENT]
+    else:
+        assert kwargs["start_new_session"] is True
+        assert signals == [command_executor.signal.SIGTERM]
     assert process.communicate_calls == 2

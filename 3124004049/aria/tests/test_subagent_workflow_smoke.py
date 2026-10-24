@@ -1,4 +1,6 @@
+import os
 import shlex
+import subprocess
 import sys
 
 import pytest
@@ -102,7 +104,11 @@ async def test_workflow_fixture_has_a_real_passing_unit_test(tmp_path) -> None:
     """测试真机冒烟所用的小任务能通过真实单元测试命令。"""
 
     _prepare_workspace(tmp_path)
-    command = f"{shlex.quote(sys.executable)} -m unittest -v"
+    command = (
+        subprocess.list2cmdline([sys.executable, "-m", "unittest", "-v"])
+        if os.name == "nt"
+        else shlex.join([sys.executable, "-m", "unittest", "-v"])
+    )
 
     executor = HostCommandExecutor()
     broken = await executor.execute(command, tmp_path, 30)

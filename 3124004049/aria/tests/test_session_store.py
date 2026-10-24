@@ -22,6 +22,21 @@ def test_append_creates_session_file_and_directory(tmp_path: Path) -> None:
     assert session_path.parent.is_dir()
 
 
+def test_session_lock_is_exclusive_until_released(tmp_path: Path) -> None:
+    store = SessionStore(tmp_path)
+    session_id = str(uuid.uuid4())
+    lock_file = store.acquire_session_lock(session_id)
+
+    try:
+        with pytest.raises(SessionStoreError, match="already open"):
+            store.acquire_session_lock(session_id)
+    finally:
+        store.release_session_lock(lock_file)
+
+    replacement_lock = store.acquire_session_lock(session_id)
+    store.release_session_lock(replacement_lock)
+
+
 def test_jsonl_contains_one_json_record_per_line(tmp_path: Path) -> None:
     """测试多条消息按顺序写成独立的 JSON 记录。"""
 

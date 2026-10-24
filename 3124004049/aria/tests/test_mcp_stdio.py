@@ -146,13 +146,13 @@ async def test_stdio_provider_times_out_unresponsive_tool_call(
         'elif method == "tools/call":\n        result = {"content": [{"type": "text", "text": request["params"]["arguments"]["text"]}]}',
         'elif method == "tools/call":\n        continue',
     )
-    monkeypatch.setattr("core.tools.mcp_stdio.MCP_REQUEST_TIMEOUT_SECONDS", 0.05)
     provider = StdioMcpProvider(
         [sys.executable, "-u", "-c", hanging_server],
         provider_id="test-server",
         cwd=tmp_path,
     )
     await provider.list_tools()
+    monkeypatch.setattr("core.tools.mcp_stdio.MCP_REQUEST_TIMEOUT_SECONDS", 0.05)
     result = await provider.call_tool(ToolCall("call-1", "remote_echo", {}))
 
     assert result.is_error is True

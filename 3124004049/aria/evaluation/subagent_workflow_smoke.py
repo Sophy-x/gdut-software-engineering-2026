@@ -3,7 +3,9 @@
 import argparse
 import asyncio
 import json
+import os
 import shlex
+import subprocess
 import sys
 import tempfile
 from collections import Counter
@@ -359,7 +361,12 @@ def main() -> int:
         async def run() -> SubagentWorkflowResult:
             client = OpenAICompatibleClient(settings)
             try:
-                command = f"{shlex.quote(sys.executable)} -m unittest -v"
+                arguments = [sys.executable, "-m", "unittest", "-v"]
+                command = (
+                    subprocess.list2cmdline(arguments)
+                    if os.name == "nt"
+                    else shlex.join(arguments)
+                )
                 return await run_subagent_workflow_smoke(
                     workspace,
                     client,

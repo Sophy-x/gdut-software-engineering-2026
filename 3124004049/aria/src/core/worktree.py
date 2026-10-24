@@ -31,6 +31,7 @@ def _git(path: Path, *args: str, check: bool = True) -> subprocess.CompletedProc
     try:
         result = subprocess.run(
             ["git", "-C", str(path), *args], text=True,
+            encoding="utf-8", errors="replace",
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120,
             check=False,
         )
@@ -117,6 +118,11 @@ def remove_worktree(repo_root: Path, path: Path) -> None:
         if target.parent != root.parent or not target.name.startswith(f".{root.name}-worker-"):
             raise WorktreeError("refusing to remove an unrelated worktree")
         registered = _git(root, "worktree", "list", "--porcelain").stdout
-        if f"worktree {target}\n" not in registered:
+        registered_paths = (
+            Path(line.removeprefix("worktree ")).resolve()
+            for line in registered.splitlines()
+            if line.startswith("worktree ")
+        )
+        if target not in registered_paths:
             raise WorktreeError("worktree is not registered in this repository")
         _git(root, "worktree", "remove", str(target))

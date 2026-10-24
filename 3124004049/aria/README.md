@@ -2,7 +2,7 @@
 |-------------------|-----------------|
 | 这个作业要求在哪里 | [构建一个能说会做的智能体](https://edu.cnblogs.com/campus/gdgy/Class56-Grade2024-CS/homework/16760) |
 | 这个作业的目标 | 实现一个能够理解自然语言、调用工具处理文件和执行命令，并记住多轮对话的编程与办公助手。 |
-| 学号 | 3124004049（陈锦清）、3124004064（廖程东） |
+| 学号 | 3124004049（成员A）、3124004064（成员B） |
 
 # 构建一个能说会做的智能体：Aria
 
@@ -80,7 +80,19 @@ MCP 接入使用标准输入输出与外部 Server 通信，完成初始化、`t
 
 ## 5. 安装与运行
 
-需要 Python 3.11+、Git、uv 和 ripgrep（`rg` 命令，供文件搜索工具使用）。完整自动化验证在 WSL Ubuntu 下完成；部分命令测试使用 POSIX Shell，Windows 用户进行完整复现时建议使用 WSL。
+需要 Python 3.11+、Git、uv 和 ripgrep（`rg` 命令，供文件搜索工具使用）。核心终端程序支持 Windows、macOS 和 Linux；命令工具在 Windows 使用 `cmd.exe`，在 macOS/Linux 使用 `/bin/sh`。PowerShell 命令可通过 `powershell -NoProfile -Command "..."` 显式执行。
+
+SWE-bench 需要可用的 Linux Docker 引擎和官方评测镜像；已适配 Windows 宿主的容器启动与进程清理，但真实评测仍建议在 WSL2 中运行。`evaluation.big_task_single_goal` 实验还会挂载宿主的 Linux Node 工具链，需在 Linux/WSL2 环境运行。
+
+Windows 可在 PowerShell 中安装 ripgrep，然后按常规方式同步依赖并启动：
+
+```powershell
+winget install --id BurntSushi.ripgrep.MSVC -e
+uv sync --frozen
+uv run aria
+```
+
+也可使用 Scoop 或 Chocolatey 安装 ripgrep。安装后需重新打开终端，使 `rg` 加入 `PATH`。
 
 Ubuntu 可先安装搜索工具：
 
@@ -131,7 +143,7 @@ uv run aria --config .aria/settings.json
 继续输入：
 
 ```text
-把刚才清单中廖程东负责的“执行测试与整理演示证据”标为已完成，其余任务保持不变，并读取修改后的文件确认。
+把刚才清单中成员B负责的“执行测试与整理演示证据”标为已完成，其余任务保持不变，并读取修改后的文件确认。
 ```
 
 预期过程：利用会话历史定位刚才的文件 → 读取与编辑 → 用户批准 → 再次读取确认。此过程同时展示对话记忆与工具执行。
@@ -165,7 +177,7 @@ uv run --frozen aria --help
 
 离线评测覆盖多轮记忆、文件编辑、工具失败恢复、上下文压缩恢复、取消后的会话恢复和模型重试六种场景，不需要 API Key。默认输出到被忽略的 `evaluation-results/`。
 
-验证结果为 910 项测试通过、1 项因缺少 TypeScript 编译器跳过，六项离线评测场景全部通过。测试日志与评测报告保存在 [evidence/](./evidence/)。
+Windows 原生环境最新验证为 915 项测试通过、0 项失败、1 项因缺少 TypeScript 编译器跳过，六项离线评测场景全部通过。详细环境、测试方式与容器评测边界见 [Windows 验证记录](./evidence/windows-validation.md)；其他测试日志与评测报告保存在 [evidence/](./evidence/)。
 
 ## 8. 小组分工安排
 
@@ -173,25 +185,25 @@ uv run --frozen aria --help
 
 | 模块 | 负责人 | 主要工作 | 对应代码 |
 | --- | --- | --- | --- |
-| 模型接入与 Agent 主循环 | 3124004049 陈锦清 | 实现模型接口调用、流式回复处理，以及“模型 → 工具 → 模型”的任务调度循环 | `openai_client.py`、`model.py`、`agent_loop.py` |
-| 会话记忆与上下文管理 | 3124004049 陈锦清 | 实现对话历史保存、会话恢复、上下文预算与历史压缩 | `session.py`、`session_store.py`、`session_persistence.py`、`context.py` |
-| 配置与异常处理 | 3124004049 陈锦清 | 实现配置加载与校验、启动参数处理、模型请求异常分类与重试 | `config.py`、`main.py`、`errors.py`、`error_policy.py` |
-| 本地工具与执行权限 | 3124004064 廖程东 | 实现文件读取、搜索、写入、编辑与命令执行，以及工具注册、参数校验和权限管理 | `tools/file_tools.py`、`tools/mutation_tools.py`、`tools/command_tool.py`、`tools/manager.py`、`tools/permissions.py` |
-| MCP 外部工具接入 | 3124004064 廖程东 | 实现 stdio MCP 通信、工具发现、远程调用与协议错误处理 | `tools/mcp.py`、`tools/mcp_stdio.py` |
-| 终端界面与交互 | 3124004064 廖程东 | 实现终端消息展示、输入交互、工具审批界面和 Slash Command 操作 | `screen.py`、`ui.py`、`input_prompt.py`、`tool_approval.py`、`commands/` |
+| 模型接入与 Agent 主循环 | 3124004049 成员A | 实现模型接口调用、流式回复处理，以及“模型 → 工具 → 模型”的任务调度循环 | `openai_client.py`、`model.py`、`agent_loop.py` |
+| 会话记忆与上下文管理 | 3124004049 成员A | 实现对话历史保存、会话恢复、上下文预算与历史压缩 | `session.py`、`session_store.py`、`session_persistence.py`、`context.py` |
+| 配置与异常处理 | 3124004049 成员A | 实现配置加载与校验、启动参数处理、模型请求异常分类与重试 | `config.py`、`main.py`、`errors.py`、`error_policy.py` |
+| 本地工具与执行权限 | 3124004064 成员B | 实现文件读取、搜索、写入、编辑与命令执行，以及工具注册、参数校验和权限管理 | `tools/file_tools.py`、`tools/mutation_tools.py`、`tools/command_tool.py`、`tools/manager.py`、`tools/permissions.py` |
+| MCP 外部工具接入 | 3124004064 成员B | 实现 stdio MCP 通信、工具发现、远程调用与协议错误处理 | `tools/mcp.py`、`tools/mcp_stdio.py` |
+| 终端界面与交互 | 3124004064 成员B | 实现终端消息展示、输入交互、工具审批界面和 Slash Command 操作 | `screen.py`、`ui.py`、`input_prompt.py`、`tool_approval.py`、`commands/` |
 
 表中代码路径均相对于 `src/core/`。模块测试由各自负责人编写与维护，双方交叉检查关键逻辑；整体联调、端到端测试、功能演示、博客整合和最终提交由两人共同完成。
 
 
 ## 9. 成员心得
 
-### 3124004049 陈锦清
+### 3124004049 成员A
 
 这次作业让我对智能体与普通聊天程序的区别有了更具体的理解。模型生成回复只是其中一步，还需要把工具调用解析出来、交给对应模块执行，再把执行结果传回模型，才能形成完整的任务处理流程。在梳理模型接入与 Agent 主循环时，我认识到每一层的职责需要清楚：模型负责理解和决策，工具负责执行，主循环负责衔接过程。这样处理后，模型接口、工具实现和界面就能分别调整，出错时也更容易定位。
 
 会话记忆与上下文管理是另一个收获。保存聊天记录并不等于模型能够一直记住全部内容，还要考虑上下文窗口、历史消息的组织和压缩后的信息保留。会话恢复也需要依靠明确的存储结构，而不是只保留终端上显示的文字。配置校验、异常分类和请求重试这些看似辅助的部分，同样影响程序能否稳定运行。通过这次作业，我更重视模块边界和可验证的执行结果；与同伴对接工具和界面模块时，也体会到先约定好输入、输出和错误格式，可以减少后续联调中的反复修改。
 
-### 3124004064 廖程东
+### 3124004064 成员B
 
 这次作业让我认识到，让智能体“会做”需要处理很多具体的工程问题。以文件工具为例，除了完成读取和修改，还要检查参数、限定操作路径、处理文件不存在等情况，并把执行结果清楚地返回给模型。命令执行和写文件还涉及用户确认，不能因为模型提出了操作就直接执行。工具注册、权限判断和实际执行分开后，工具的职责更明确，也更方便分别测试。
 

@@ -1,6 +1,6 @@
 """负责会话消息的 JSONL 文件读写。"""
 
-import fcntl
+import errno
 import json
 import os
 import subprocess
@@ -75,12 +75,18 @@ class SessionStore:
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         lock_file = lock_path.open("a+", encoding="utf-8")
         try:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as exc:
+            _lock_session_file(lock_file)
+        except OSError as exc:
             lock_file.close()
-            raise SessionStoreError(
-                f"session is already open: {session_id}"
-            ) from exc
+            if isinstance(exc, BlockingIOError) or exc.errno in {
+                errno.EACCES,
+                errno.EAGAIN,
+                errno.EDEADLK,
+            }:
+                raise SessionStoreError(
+                    f"session is already open: {session_id}"
+                ) from exc
+            raise
         return lock_file
 
     @staticmethod
@@ -88,7 +94,7 @@ class SessionStore:
         """释放 Session 独占锁并关闭锁文件。"""
 
         try:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+            _unlock_session_file(lock_file)
         finally:
             lock_file.close()
 
@@ -579,6 +585,40 @@ def _delete_file(path: Path) -> None:
     except (OSError, subprocess.TimeoutExpired):
         pass
     path.unlink(missing_ok=True)
+
+
+def _lock_session_file(lock_file: TextIO) -> None:
+    """按宿主平台以非阻塞方式锁定一个稳定的文件区域。"""
+
+    if os.name == "nt":
+        import msvcrt
+
+        lock_file.seek(0, os.SEEK_END)
+        if lock_file.tell() == 0:
+            lock_file.write(" ")
+            lock_file.flush()
+        lock_file.seek(0)
+        msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+        return
+
+    import fcntl
+
+    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
+def _unlock_session_file(lock_file: TextIO) -> None:
+    """释放由 _lock_session_file 获取的平台文件锁。"""
+
+    if os.name == "nt":
+        import msvcrt
+
+        lock_file.seek(0)
+        msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+        return
+
+    import fcntl
+
+    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
 def _usage_from_record(value: object, line_number: int) -> UsageEvent | None:
