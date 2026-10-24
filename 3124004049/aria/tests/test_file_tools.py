@@ -159,6 +159,23 @@ async def test_search_files_returns_matching_lines(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_search_files_handles_unicode_paths_and_crlf(tmp_path: Path) -> None:
+    """中文与空格路径、CRLF 内容返回统一的相对路径和纯文本行。"""
+
+    directory = tmp_path / "中文 目录"
+    directory.mkdir()
+    (directory / "会议 记录.txt").write_bytes("开头\r\n待办: 整理记录\r\n".encode("utf-8"))
+    manager = _manager(tmp_path, create_search_files_tool(tmp_path))
+
+    result = await manager.execute(
+        _call("search_files", {"pattern": "待办", "path": directory.name})
+    )
+
+    assert result.is_error is False
+    assert result.content == "中文 目录/会议 记录.txt:2: 待办: 整理记录"
+
+
+@pytest.mark.asyncio
 async def test_search_files_explains_invalid_search_path(tmp_path: Path) -> None:
     """测试搜索范围错误会给出可执行的修正提示。"""
 

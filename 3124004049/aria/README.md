@@ -80,7 +80,19 @@ MCP 接入使用标准输入输出与外部 Server 通信，完成初始化、`t
 
 ## 5. 安装与运行
 
-需要 Python 3.11+、Git、uv 和 ripgrep（`rg` 命令，供文件搜索工具使用）。完整自动化验证在 WSL Ubuntu 下完成；部分命令测试使用 POSIX Shell，Windows 用户进行完整复现时建议使用 WSL。
+需要 Python 3.11+、Git、uv 和 ripgrep（`rg` 命令，供文件搜索工具使用）。核心终端程序支持 Windows、macOS 和 Linux；命令工具在 Windows 使用 `cmd.exe`，在 macOS/Linux 使用 `/bin/sh`。PowerShell 命令可通过 `powershell -NoProfile -Command "..."` 显式执行。
+
+SWE-bench 需要可用的 Linux Docker 引擎和官方评测镜像；已适配 Windows 宿主的容器启动与进程清理，但真实评测仍建议在 WSL2 中运行。`evaluation.big_task_single_goal` 实验还会挂载宿主的 Linux Node 工具链，需在 Linux/WSL2 环境运行。
+
+Windows 可在 PowerShell 中安装 ripgrep，然后按常规方式同步依赖并启动：
+
+```powershell
+winget install --id BurntSushi.ripgrep.MSVC -e
+uv sync --frozen
+uv run aria
+```
+
+也可使用 Scoop 或 Chocolatey 安装 ripgrep。安装后需重新打开终端，使 `rg` 加入 `PATH`。
 
 Ubuntu 可先安装搜索工具：
 
@@ -165,7 +177,7 @@ uv run --frozen aria --help
 
 离线评测覆盖多轮记忆、文件编辑、工具失败恢复、上下文压缩恢复、取消后的会话恢复和模型重试六种场景，不需要 API Key。默认输出到被忽略的 `evaluation-results/`。
 
-验证结果为 910 项测试通过、1 项因缺少 TypeScript 编译器跳过，六项离线评测场景全部通过。测试日志与评测报告保存在 [evidence/](./evidence/)。
+Windows 原生环境最新验证为 915 项测试通过、0 项失败、1 项因缺少 TypeScript 编译器跳过，六项离线评测场景全部通过。详细环境、测试方式与容器评测边界见 [Windows 验证记录](./evidence/windows-validation.md)；其他测试日志与评测报告保存在 [evidence/](./evidence/)。
 
 ## 8. 小组分工安排
 

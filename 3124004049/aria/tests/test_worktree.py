@@ -130,3 +130,14 @@ def test_worktree_requires_clean_git_checkout(tmp_path: Path, repo: Path) -> Non
     with pytest.raises(WorktreeError, match="uncommitted"):
         create_worktree(repo, "worker")
     assert (repo / "uncommitted.txt").read_text(encoding="utf-8") == "user data"
+
+
+def test_worktree_supports_unicode_and_spaces_in_checkout_path(repo: Path) -> None:
+    """Git 输出中的中文、空格路径也能在创建后正确匹配并清理。"""
+
+    unicode_root = repo.with_name("中文 工作区")
+    repo.rename(unicode_root)
+    worktree = create_worktree(unicode_root, "unicode")
+    remove_worktree(unicode_root, worktree)
+
+    assert not worktree.exists()

@@ -15,7 +15,7 @@ def format_cwd_for_footer(cwd: str, home: str | None = None) -> str:
         return cwd
     if str(relative) == ".":
         return "~"
-    return f"~/{relative}"
+    return f"~/{relative.as_posix()}"
 
 
 @dataclass(frozen=True)

@@ -1,6 +1,7 @@
 """实现命令执行工具。"""
 
 import asyncio
+import locale
 from pathlib import Path
 
 from ..model import ToolCall, ToolResult
@@ -70,7 +71,16 @@ def _format_output(stdout: bytes, stderr: bytes) -> str:
 
     parts: list[str] = []
     if stdout:
-        parts.append(stdout.decode(errors="replace").rstrip())
+        parts.append(_decode_command_output(stdout).rstrip())
     if stderr:
-        parts.append(f"stderr:\n{stderr.decode(errors='replace').rstrip()}")
+        parts.append(f"stderr:\n{_decode_command_output(stderr).rstrip()}")
     return "\n".join(parts) or "command executed successfully"
+
+
+def _decode_command_output(output: bytes) -> str:
+    """优先识别 UTF-8，兼容 Windows 本地代码页输出。"""
+
+    try:
+        return output.decode("utf-8")
+    except UnicodeDecodeError:
+        return output.decode(locale.getpreferredencoding(False), errors="replace")

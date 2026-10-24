@@ -18,7 +18,7 @@ from core.screen import (
     SlashCommandCompleter,
     _StreamingAssistantEntry,
 )
-from core.status import create_status_info
+from core.status import create_status_info, format_cwd_for_footer
 from core.model import ToolCall
 from core.tools import ApprovalDecision, ToolDefinition
 from core.ui_config import InputLayoutConfig
@@ -119,7 +119,7 @@ def test_chat_screen_renders_status_rows(tmp_path: Path) -> None:
 
     assert "test-model" in row2_right
     assert "暂不可查询" in row2_left
-    assert str(tmp_path) in row1_left
+    assert format_cwd_for_footer(str(tmp_path), str(Path.home())) in row1_left
     assert row1_right == ""
 
 

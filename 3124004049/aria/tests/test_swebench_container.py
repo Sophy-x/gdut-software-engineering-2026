@@ -3,9 +3,11 @@
 import asyncio
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
+import evaluation.swebench_container as swebench_container
 from core.tools import command_executor
 from evaluation.swebench_container import (
     CONTAINER_WORKDIR,
@@ -13,6 +15,18 @@ from evaluation.swebench_container import (
     SwebenchContainerError,
     SwebenchTaskContainer,
 )
+
+
+@pytest.mark.parametrize(
+    ("host_os", "expected"),
+    [
+        (SimpleNamespace(name="nt"), "0:0"),
+        (SimpleNamespace(name="posix", geteuid=lambda: 1234, getegid=lambda: 5678), "1234:5678"),
+    ],
+)
+def test_container_user_matches_host_platform(host_os, expected, monkeypatch) -> None:
+    monkeypatch.setattr(swebench_container, "os", host_os)
+    assert swebench_container._host_workspace_user() == expected
 
 
 @pytest.mark.asyncio
@@ -28,8 +42,7 @@ async def test_task_container_uses_isolated_official_image_workspace(
         return subprocess.CompletedProcess(command, 0, "container-1\n", "")
 
     monkeypatch.setattr("evaluation.swebench_container.subprocess.run", run)
-    monkeypatch.setattr("evaluation.swebench_container.os.geteuid", lambda: 1234)
-    monkeypatch.setattr("evaluation.swebench_container.os.getegid", lambda: 5678)
+    monkeypatch.setattr(swebench_container, "_host_workspace_user", lambda: "1234:5678")
     container = SwebenchTaskContainer("swebench/example:latest", tmp_path)
 
     container_id = await container.start()
@@ -154,7 +167,7 @@ async def test_container_executor_runs_command_in_task_workdir(
         "-lc",
         "pytest -q",
     )
-    assert kwargs["start_new_session"] is True
+    assert kwargs.items() >= command_executor.process_group_options().items()
 
 
 @pytest.mark.asyncio
@@ -185,6 +198,9 @@ async def test_container_executor_timeout_removes_task_container(
             self.returncode = 0
             return 0
 
+        def send_signal(self, value: int) -> None:
+            signals.append(value)
+
     async def create_process(*arguments: str, **kwargs) -> HangingProcess:
         return HangingProcess()
 
@@ -192,18 +208,24 @@ async def test_container_executor_timeout_removes_task_container(
     monkeypatch.setattr(
         "evaluation.swebench_container.asyncio.create_subprocess_exec", create_process
     )
-    monkeypatch.setattr(
-        command_executor.os,
-        "killpg",
-        lambda process_id, value: signals.append(value),
-    )
+    if command_executor.os.name == "posix":
+        monkeypatch.setattr(
+            command_executor.os,
+            "killpg",
+            lambda process_id, value: signals.append(value),
+        )
     container = SwebenchTaskContainer("swebench/example:latest", tmp_path)
     await container.start()
 
     with pytest.raises(TimeoutError):
         await SwebenchContainerExecutor(container).execute("sleep 10", tmp_path, 0.01)
 
-    assert signals == [command_executor.signal.SIGTERM]
+    expected_signal = (
+        command_executor.signal.CTRL_BREAK_EVENT
+        if command_executor.os.name == "nt"
+        else command_executor.signal.SIGTERM
+    )
+    assert signals == [expected_signal]
     assert container.container_id is None
     assert docker_calls[-1] == ["docker", "rm", "--force", "container-1"]
 
@@ -239,6 +261,9 @@ async def test_container_executor_cancellation_removes_task_container(
             self.returncode = 0
             return 0
 
+        def send_signal(self, value: int) -> None:
+            pass
+
     process = HangingProcess()
 
     async def create_process(*arguments: str, **kwargs) -> HangingProcess:
@@ -248,7 +273,8 @@ async def test_container_executor_cancellation_removes_task_container(
     monkeypatch.setattr(
         "evaluation.swebench_container.asyncio.create_subprocess_exec", create_process
     )
-    monkeypatch.setattr(command_executor.os, "killpg", lambda *args: None)
+    if command_executor.os.name == "posix":
+        monkeypatch.setattr(command_executor.os, "killpg", lambda *args: None)
     container = SwebenchTaskContainer("swebench/example:latest", tmp_path)
     await container.start()
     task = asyncio.create_task(

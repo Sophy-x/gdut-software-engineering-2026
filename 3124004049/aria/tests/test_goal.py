@@ -114,8 +114,12 @@ def test_goal_jsonl_round_trip_and_clear(tmp_path: Path) -> None:
     assert restored.get_messages() == [Message(role="user", content="开始")]
     restored.clear_goal()
     restored.close()
-    assert Session.restore(tmp_path, session_id).get_goal() is None
-    records = [json.loads(line) for line in (tmp_path / ".aria/sessions" / f"{session_id}.jsonl").read_text().splitlines()]
+    cleared = Session.restore(tmp_path, session_id)
+    try:
+        assert cleared.get_goal() is None
+    finally:
+        cleared.close()
+    records = [json.loads(line) for line in (tmp_path / ".aria/sessions" / f"{session_id}.jsonl").read_text(encoding="utf-8").splitlines()]
     assert [record["type"] for record in records].count("goal") == 3
 
 

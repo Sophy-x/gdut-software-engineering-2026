@@ -7,7 +7,9 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncIterator
 
-from core.tools.command_executor import CommandExecution, terminate_process_group
+from core.tools.command_executor import (
+    CommandExecution, process_group_options, terminate_process_group,
+)
 
 
 CONTAINER_WORKDIR = "/testbed"
@@ -128,7 +130,7 @@ class SwebenchContainerExecutor:
             command,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            start_new_session=True,
+            **process_group_options(),
         )
         try:
             stdout, stderr = await asyncio.wait_for(
@@ -151,6 +153,8 @@ async def _run_docker(arguments: list[str]) -> subprocess.CompletedProcess[str]:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             check=False,
         )
     except OSError as exc:
@@ -167,4 +171,7 @@ def _docker_error(operation: str, completed: subprocess.CompletedProcess[str]) -
 def _host_workspace_user() -> str:
     """返回可写入宿主绑定工作区的有效用户身份。"""
 
+    # Docker Desktop 的 Windows 挂载不使用宿主 POSIX UID/GID。
+    if os.name == "nt":
+        return "0:0"
     return f"{os.geteuid()}:{os.getegid()}"

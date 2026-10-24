@@ -3,6 +3,7 @@
 import asyncio
 import os
 import signal
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -45,7 +46,7 @@ class HostCommandExecutor:
             cwd=cwd.resolve(),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            start_new_session=True,
+            **process_group_options(),
         )
         try:
             stdout, stderr = await asyncio.wait_for(
@@ -65,22 +66,33 @@ async def terminate_process_group(process: asyncio.subprocess.Process) -> None:
     """终止命令进程组并回收标准输出与错误管道。"""
 
     if process.returncode is None:
-        if os.name == "posix":
+        if os.name == "nt":
+            try:
+                process.send_signal(signal.CTRL_BREAK_EVENT)
+            except OSError:
+                process.terminate()
+        else:
             try:
                 os.killpg(process.pid, signal.SIGTERM)
             except ProcessLookupError:
                 pass
-        else:
-            process.terminate()
         try:
             await asyncio.wait_for(process.wait(), timeout=1)
         except TimeoutError:
-            if os.name == "posix":
+            if os.name == "nt":
+                process.kill()
+            else:
                 try:
                     os.killpg(process.pid, signal.SIGKILL)
                 except ProcessLookupError:
                     pass
-            else:
-                process.kill()
             await process.wait()
     await process.communicate()
+
+
+def process_group_options() -> dict[str, int | bool]:
+    """返回创建可单独终止子进程组所需的平台参数。"""
+
+    if os.name == "nt":
+        return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+    return {"start_new_session": True}

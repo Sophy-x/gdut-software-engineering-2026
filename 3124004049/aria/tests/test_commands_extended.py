@@ -238,7 +238,7 @@ async def test_status_command_shows_model_and_context() -> None:
 
     content = screen.entries[0][1]
     assert "deepseek-v4-pro" in content
-    assert "/tmp/ws" in content
+    assert str(context.project_dir) in content
     assert "128000" in content
 
 

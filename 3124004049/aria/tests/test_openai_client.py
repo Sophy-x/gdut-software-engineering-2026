@@ -337,7 +337,8 @@ async def test_client_allows_long_stream_with_active_chunks() -> None:
             return self
 
         async def __anext__(self):
-            await asyncio.sleep(0.02)
+            # 总时长超过 0.5s，但分片间隔留出足够的系统调度余量。
+            await asyncio.sleep(0.2)
             try:
                 content = next(self._chunks)
             except StopIteration as exc:
@@ -354,8 +355,8 @@ async def test_client_allows_long_stream_with_active_chunks() -> None:
         base_url="https://example.com/v1",
         model_name="test-model",
         api_key="test-key",
-        first_byte_timeout_seconds=0.06,
-        stream_idle_timeout_seconds=0.06,
+        first_byte_timeout_seconds=0.5,
+        stream_idle_timeout_seconds=0.5,
     )
     delayed_sdk = SimpleNamespace(chat=SimpleNamespace(completions=DelayedCompletions()))
     client = OpenAICompatibleClient(settings, delayed_sdk)  # type: ignore[arg-type]
@@ -376,7 +377,8 @@ async def test_client_times_out_when_stream_becomes_idle() -> None:
 
         async def __anext__(self):
             self._calls += 1
-            await asyncio.sleep(0.01 if self._calls == 1 else 0.08)
+            if self._calls > 1:
+                await asyncio.Event().wait()
             return SimpleNamespace(
                 choices=[SimpleNamespace(delta=SimpleNamespace(content="片段"))]
             )
@@ -389,8 +391,8 @@ async def test_client_times_out_when_stream_becomes_idle() -> None:
         base_url="https://example.com/v1",
         model_name="test-model",
         api_key="test-key",
-        first_byte_timeout_seconds=0.04,
-        stream_idle_timeout_seconds=0.04,
+        first_byte_timeout_seconds=0.5,
+        stream_idle_timeout_seconds=0.1,
     )
     idle_sdk = SimpleNamespace(chat=SimpleNamespace(completions=IdleCompletions()))
     client = OpenAICompatibleClient(settings, idle_sdk)  # type: ignore[arg-type]
