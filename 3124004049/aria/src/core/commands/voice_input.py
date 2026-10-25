@@ -1,7 +1,15 @@
 """实现 /listen 命令：将识别到的语音放入可编辑输入框。"""
 
+import asyncio
+
 from .registry import CommandContext, SlashCommand
-from ..voice import NoSpeechDetected, SpeechRecognition, VoiceError, WhisperSpeech
+from ..voice import (
+    NoSpeechDetected,
+    RecordingCancelled,
+    SpeechRecognition,
+    VoiceError,
+    WhisperSpeech,
+)
 
 
 async def listen_command(context: CommandContext) -> None:
@@ -15,11 +23,16 @@ async def listen_command(context: CommandContext) -> None:
         )
         return
 
-    context.screen.set_status_message("Listening for speech...")
+    context.screen.set_status_message("Recording... Press Esc to stop")
     try:
         result = await recognizer.recognize()
+    except asyncio.CancelledError:
+        context.screen.add_entry("tool", "Voice recording stopped.")
+        raise
     except NoSpeechDetected as exc:
         context.screen.add_entry("tool", f"No speech detected: {exc}")
+    except RecordingCancelled:
+        context.screen.add_entry("tool", "Voice recording stopped.")
     except VoiceError as exc:
         context.screen.add_entry("tool", f"Voice input failed: {exc}")
     else:

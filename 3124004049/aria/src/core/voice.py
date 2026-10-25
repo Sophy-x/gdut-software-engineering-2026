@@ -6,6 +6,7 @@ import os
 import shutil
 import subprocess
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -16,6 +17,10 @@ class VoiceError(RuntimeError):
 
 class NoSpeechDetected(VoiceError):
     """录音窗口内没有检测到有效语音。"""
+
+
+class RecordingCancelled(VoiceError):
+    """录音在用户停止监听后结束。"""
 
 
 @dataclass(frozen=True)
@@ -54,6 +59,8 @@ class WhisperSpeech:
         self.compute_type = compute_type
         self.record_seconds = record_seconds
         self.input_device = input_device
+        self._active_stop_event: threading.Event | None = None
+        self._active_lock = threading.Lock()
 
     @staticmethod
     def available() -> bool:
@@ -70,9 +77,33 @@ class WhisperSpeech:
     async def recognize(self) -> SpeechRecognition:
         """录音并使用 Whisper 自动检测语言后返回转写结果。"""
 
-        return await asyncio.to_thread(self._recognize_sync)
+        stop_event = threading.Event()
+        with self._active_lock:
+            if self._active_stop_event is not None:
+                raise VoiceError("Voice recording is already active")
+            self._active_stop_event = stop_event
+        try:
+            return await asyncio.to_thread(self._recognize_sync, stop_event)
+        except asyncio.CancelledError:
+            stop_event.set()
+            raise
+        finally:
+            stop_event.set()
+            with self._active_lock:
+                if self._active_stop_event is stop_event:
+                    self._active_stop_event = None
 
-    def _recognize_sync(self) -> SpeechRecognition:
+    def stop(self) -> None:
+        """请求停止当前录音；没有录音时不执行任何操作。"""
+
+        with self._active_lock:
+            stop_event = self._active_stop_event
+        if stop_event is not None:
+            stop_event.set()
+
+    def _recognize_sync(
+        self, stop_event: threading.Event | None = None
+    ) -> SpeechRecognition:
         """同步录制一段音频并运行一次 Whisper 转写。"""
 
         try:
@@ -86,21 +117,16 @@ class WhisperSpeech:
         if self.record_seconds <= 0:
             raise VoiceError("ARIA_VOICE_RECORD_SECONDS must be greater than zero")
 
+        active_stop_event = stop_event or threading.Event()
         try:
-            frames = int(self.record_seconds * _SAMPLE_RATE)
-            record_kwargs = {
-                "samplerate": _SAMPLE_RATE,
-                "channels": 1,
-                "dtype": "float32",
-                "blocking": True,
-            }
-            if self.input_device is not None:
-                record_kwargs["device"] = self.input_device
-            recording = sd.rec(frames, **record_kwargs)
+            audio = self._record_audio(sd, np, active_stop_event)
+        except RecordingCancelled:
+            raise
         except Exception as exc:
-            raise VoiceError(f"Failed to record from the default microphone: {exc}") from exc
+            raise VoiceError(
+                f"Failed to record from the default microphone: {exc}"
+            ) from exc
 
-        audio = np.asarray(recording, dtype=np.float32).reshape(-1)
         if audio.size == 0 or float(np.max(np.abs(audio))) < _MIN_AUDIO_LEVEL:
             raise NoSpeechDetected(
                 f"No speech detected in the {self.record_seconds:g}-second recording"
@@ -127,6 +153,41 @@ class WhisperSpeech:
             language=str(info.language),
             language_probability=float(info.language_probability),
         )
+
+    def _record_audio(self, sd, np, stop_event: threading.Event):
+        """以可取消的流式方式采集固定时长的单声道音频。"""
+
+        chunks = []
+
+        def on_audio(indata, frames, callback_time, status) -> None:
+            """复制音频块，避免回调返回后底层缓冲区被复用。"""
+
+            if not stop_event.is_set():
+                chunks.append(indata.copy())
+
+        stream_kwargs = {
+            "samplerate": _SAMPLE_RATE,
+            "channels": 1,
+            "dtype": "float32",
+            "callback": on_audio,
+        }
+        if self.input_device is not None:
+            stream_kwargs["device"] = self.input_device
+
+        deadline = time.monotonic() + self.record_seconds
+        with sd.InputStream(**stream_kwargs):
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                if stop_event.wait(min(0.05, remaining)):
+                    raise RecordingCancelled("Voice recording stopped")
+
+        if stop_event.is_set():
+            raise RecordingCancelled("Voice recording stopped")
+        if not chunks:
+            return np.empty(0, dtype=np.float32)
+        return np.concatenate(chunks, axis=0).astype(np.float32, copy=False).reshape(-1)
 
     def _get_model(self):
         """懒加载并缓存模型，避免每次 /listen 都重新加载。"""

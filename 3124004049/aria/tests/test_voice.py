@@ -1,8 +1,10 @@
 """测试 Windows 语音服务的可预测部分，不访问麦克风或扬声器。"""
 
 import base64
+import asyncio
 import subprocess
 import sys
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -23,9 +25,20 @@ def test_whisper_recognizes_audio_and_detects_language(
     import numpy as np
 
     class FakeSoundDevice:
+        class InputStream:
+            def __init__(self, callback, **kwargs):
+                self._callback = callback
+
+            def __enter__(self):
+                self._callback(np.ones((4, 1), dtype=np.float32), 4, None, None)
+                return self
+
+            def __exit__(self, *args):
+                return False
+
         @staticmethod
-        def rec(*args, **kwargs):
-            return np.ones((kwargs["channels"],), dtype=np.float32)
+        def wait(*args, **kwargs):
+            return None
 
     class FakeModel:
         def transcribe(self, audio, **kwargs):
@@ -51,9 +64,20 @@ def test_whisper_reports_silent_recording(monkeypatch: pytest.MonkeyPatch) -> No
     import numpy as np
 
     class FakeSoundDevice:
+        class InputStream:
+            def __init__(self, callback, **kwargs):
+                self._callback = callback
+
+            def __enter__(self):
+                self._callback(np.zeros((4, 1), dtype=np.float32), 4, None, None)
+                return self
+
+            def __exit__(self, *args):
+                return False
+
         @staticmethod
-        def rec(*args, **kwargs):
-            return np.zeros((kwargs["channels"],), dtype=np.float32)
+        def wait(*args, **kwargs):
+            return None
 
     monkeypatch.setitem(sys.modules, "sounddevice", FakeSoundDevice)
 
@@ -63,14 +87,51 @@ def test_whisper_reports_silent_recording(monkeypatch: pytest.MonkeyPatch) -> No
 
 def test_whisper_reports_recording_errors(monkeypatch: pytest.MonkeyPatch) -> None:
     class FailingSoundDevice:
-        @staticmethod
-        def rec(*args, **kwargs):
-            raise OSError("No microphone")
+        class InputStream:
+            def __init__(self, **kwargs):
+                pass
+
+            def __enter__(self):
+                raise OSError("No microphone")
+
+            def __exit__(self, *args):
+                return False
 
     monkeypatch.setitem(sys.modules, "sounddevice", FailingSoundDevice)
 
     with pytest.raises(VoiceError, match="No microphone"):
         WhisperSpeech(record_seconds=1)._recognize_sync()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_recognition_stops_input_stream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entered = threading.Event()
+    exited = threading.Event()
+
+    class FakeSoundDevice:
+        class InputStream:
+            def __init__(self, **kwargs):
+                pass
+
+            def __enter__(self):
+                entered.set()
+                return self
+
+            def __exit__(self, *args):
+                exited.set()
+                return False
+
+    monkeypatch.setitem(sys.modules, "sounddevice", FakeSoundDevice)
+    recognizer = WhisperSpeech(record_seconds=30)
+    task = asyncio.create_task(recognizer.recognize())
+
+    assert await asyncio.to_thread(entered.wait, 1)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert await asyncio.to_thread(exited.wait, 1)
 
 
 def test_speech_output_reports_service_errors(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -139,7 +200,7 @@ async def test_listen_command_places_transcript_in_editable_draft(
             "Review the draft and press Enter.",
         )
     ]
-    assert screen.status == ["Listening for speech...", ""]
+    assert screen.status == ["Recording... Press Esc to stop", ""]
 
 
 @pytest.mark.asyncio
