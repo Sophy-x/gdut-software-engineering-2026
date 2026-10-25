@@ -12,6 +12,14 @@ class VoiceError(RuntimeError):
     """语音设备或 Windows 语音服务不可用时抛出。"""
 
 
+class NoSpeechDetected(VoiceError):
+    """监听窗口内没有检测到语音。"""
+
+
+class LowConfidenceSpeech(VoiceError):
+    """检测到语音，但识别置信度过低。"""
+
+
 _RECOGNIZE_SCRIPT = r"""
 Add-Type -AssemblyName System.Speech
 $engine = New-Object System.Speech.Recognition.SpeechRecognitionEngine
@@ -19,7 +27,8 @@ try {
     $engine.LoadGrammar((New-Object System.Speech.Recognition.DictationGrammar))
     $engine.SetInputToDefaultAudioDevice()
     $result = $engine.Recognize([TimeSpan]::FromSeconds(12))
-    if ($null -eq $result -or $result.Confidence -lt 0.45) { exit 2 }
+    if ($null -eq $result) { exit 2 }
+    if ($result.Confidence -lt 0.45) { exit 3 }
     [Console]::WriteLine([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($result.Text)))
 } finally {
     $engine.Dispose()
@@ -78,7 +87,11 @@ class WindowsSpeech:
 
         result = _run_powershell(_RECOGNIZE_SCRIPT, timeout=20)
         if result.returncode == 2:
-            return None
+            raise NoSpeechDetected("No speech detected within 12 seconds")
+        if result.returncode == 3:
+            raise LowConfidenceSpeech(
+                "Speech was detected but recognition confidence was too low"
+            )
         if result.returncode != 0:
             detail = result.stderr.strip() or "speech recognition failed"
             raise VoiceError(detail)

@@ -1,7 +1,7 @@
 """实现 /listen 命令：将识别到的语音放入可编辑输入框。"""
 
 from .registry import CommandContext, SlashCommand
-from ..voice import VoiceError, WindowsSpeech
+from ..voice import LowConfidenceSpeech, NoSpeechDetected, VoiceError, WindowsSpeech
 
 
 async def listen_command(context: CommandContext) -> None:
@@ -16,6 +16,10 @@ async def listen_command(context: CommandContext) -> None:
     context.screen.set_status_message("Listening for speech...")
     try:
         transcript = await WindowsSpeech().recognize()
+    except NoSpeechDetected as exc:
+        context.screen.add_entry("tool", f"No speech detected: {exc}")
+    except LowConfidenceSpeech as exc:
+        context.screen.add_entry("tool", f"Speech was unclear: {exc}")
     except VoiceError as exc:
         context.screen.add_entry("tool", f"Voice input failed: {exc}")
     else:

@@ -7,7 +7,12 @@ from types import SimpleNamespace
 import pytest
 
 from core.commands import voice_input
-from core.voice import VoiceError, WindowsSpeech
+from core.voice import (
+    LowConfidenceSpeech,
+    NoSpeechDetected,
+    VoiceError,
+    WindowsSpeech,
+)
 
 
 def test_recognize_decodes_utf8_transcript(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -21,13 +26,26 @@ def test_recognize_decodes_utf8_transcript(monkeypatch: pytest.MonkeyPatch) -> N
     assert WindowsSpeech()._recognize_sync() == transcript
 
 
-def test_recognize_returns_none_when_no_speech(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_recognize_reports_when_no_speech(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "core.voice._run_powershell",
         lambda script, timeout: subprocess.CompletedProcess([], 2, "", ""),
     )
 
-    assert WindowsSpeech()._recognize_sync() is None
+    with pytest.raises(NoSpeechDetected, match="No speech detected"):
+        WindowsSpeech()._recognize_sync()
+
+
+def test_recognize_reports_low_confidence_speech(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "core.voice._run_powershell",
+        lambda script, timeout: subprocess.CompletedProcess([], 3, "", ""),
+    )
+
+    with pytest.raises(LowConfidenceSpeech, match="confidence was too low"):
+        WindowsSpeech()._recognize_sync()
 
 
 def test_recognize_reports_service_errors(monkeypatch: pytest.MonkeyPatch) -> None:
