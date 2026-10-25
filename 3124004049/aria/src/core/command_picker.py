@@ -58,6 +58,8 @@ class CommandPicker:
         new_texts = [completion.text for completion in completions]
         old_texts = [completion.text for completion in self._completions]
         if new_texts == old_texts:
+            # The replacement range changes as the user extends the same prefix.
+            self._completions = list(completions)
             return
         current = self.selected.text if self.selected is not None else None
         self._completions = list(completions)
