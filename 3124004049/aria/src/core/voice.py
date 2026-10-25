@@ -19,10 +19,6 @@ class NoSpeechDetected(VoiceError):
     """录音窗口内没有检测到有效语音。"""
 
 
-class RecordingCancelled(VoiceError):
-    """录音在用户停止监听后结束。"""
-
-
 @dataclass(frozen=True)
 class SpeechRecognition:
     """一次 Whisper 识别结果及其自动检测出的语言。"""
@@ -120,8 +116,6 @@ class WhisperSpeech:
         active_stop_event = stop_event or threading.Event()
         try:
             audio = self._record_audio(sd, np, active_stop_event)
-        except RecordingCancelled:
-            raise
         except Exception as exc:
             raise VoiceError(
                 f"Failed to record from the default microphone: {exc}"
@@ -181,10 +175,8 @@ class WhisperSpeech:
                 if remaining <= 0:
                     break
                 if stop_event.wait(min(0.05, remaining)):
-                    raise RecordingCancelled("Voice recording stopped")
+                    break
 
-        if stop_event.is_set():
-            raise RecordingCancelled("Voice recording stopped")
         if not chunks:
             return np.empty(0, dtype=np.float32)
         return np.concatenate(chunks, axis=0).astype(np.float32, copy=False).reshape(-1)

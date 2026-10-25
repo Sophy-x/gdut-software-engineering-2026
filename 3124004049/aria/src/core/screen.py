@@ -395,6 +395,7 @@ class ChatScreen:
         self._finalize_tasks: set[asyncio.Task[None]] = set()
         self._request_active = False
         self._request_task: asyncio.Task[None] | None = None
+        self._cancel_handler: Callable[[], None] | None = None
         self._submitted_draft: DraftState | None = None
         self._approval_prompt: ApprovalPrompt | None = None
         self._skill_picker: SkillPicker | None = None
@@ -1395,10 +1396,19 @@ class ChatScreen:
         return key_bindings
 
     def cancel_request(self) -> None:
-        """取消正在运行的模型请求。"""
+        """取消请求，或交给当前交互组件处理更细粒度的停止动作。"""
+
+        if self._cancel_handler is not None:
+            self._cancel_handler()
+            return
 
         if self._request_task is not None and not self._request_task.done():
             self._request_task.cancel()
+
+    def set_cancel_handler(self, handler: Callable[[], None] | None) -> None:
+        """设置 Esc 的临时处理器，例如停止录音但继续处理已采集内容。"""
+
+        self._cancel_handler = handler
 
     def _selected_completion(self, buffer) -> object | None:
         """返回补全列表当前选中的补全项。"""

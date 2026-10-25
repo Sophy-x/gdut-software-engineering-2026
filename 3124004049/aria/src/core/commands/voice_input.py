@@ -5,7 +5,6 @@ import asyncio
 from .registry import CommandContext, SlashCommand
 from ..voice import (
     NoSpeechDetected,
-    RecordingCancelled,
     SpeechRecognition,
     VoiceError,
     WhisperSpeech,
@@ -23,16 +22,22 @@ async def listen_command(context: CommandContext) -> None:
         )
         return
 
+    def stop_recording() -> None:
+        """停止采集但保留已经收到的音频，后续继续 Whisper 转写。"""
+
+        recognizer.stop()
+        context.screen.set_status_message("Transcribing recorded audio...")
+
+    set_cancel_handler = getattr(context.screen, "set_cancel_handler", None)
+    if set_cancel_handler is not None:
+        set_cancel_handler(stop_recording)
     context.screen.set_status_message("Recording... Press Esc to stop")
     try:
         result = await recognizer.recognize()
     except asyncio.CancelledError:
-        context.screen.add_entry("tool", "Voice recording stopped.")
         raise
     except NoSpeechDetected as exc:
         context.screen.add_entry("tool", f"No speech detected: {exc}")
-    except RecordingCancelled:
-        context.screen.add_entry("tool", "Voice recording stopped.")
     except VoiceError as exc:
         context.screen.add_entry("tool", f"Voice input failed: {exc}")
     else:
@@ -46,6 +51,8 @@ async def listen_command(context: CommandContext) -> None:
             "Review the draft and press Enter.",
         )
     finally:
+        if set_cancel_handler is not None:
+            set_cancel_handler(None)
         context.screen.set_status_message("")
 
 

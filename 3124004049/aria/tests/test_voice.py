@@ -104,18 +104,21 @@ def test_whisper_reports_recording_errors(monkeypatch: pytest.MonkeyPatch) -> No
 
 
 @pytest.mark.asyncio
-async def test_cancelled_recognition_stops_input_stream(
+async def test_stopping_recognition_transcribes_recorded_audio(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    import numpy as np
+
     entered = threading.Event()
     exited = threading.Event()
 
     class FakeSoundDevice:
         class InputStream:
-            def __init__(self, **kwargs):
-                pass
+            def __init__(self, callback, **kwargs):
+                self._callback = callback
 
             def __enter__(self):
+                self._callback(np.ones((4, 1), dtype=np.float32), 4, None, None)
                 entered.set()
                 return self
 
@@ -123,14 +126,28 @@ async def test_cancelled_recognition_stops_input_stream(
                 exited.set()
                 return False
 
+    class FakeModel:
+        def transcribe(self, audio, **kwargs):
+            return iter([SimpleNamespace(text="提前停止的语音")]), SimpleNamespace(
+                language="zh", language_probability=0.95
+            )
+
+    class FakeFasterWhisper:
+        WhisperModel = lambda *args, **kwargs: FakeModel()
+
     monkeypatch.setitem(sys.modules, "sounddevice", FakeSoundDevice)
+    monkeypatch.setitem(sys.modules, "faster_whisper", FakeFasterWhisper)
+    import core.voice as voice
+
+    voice._MODEL_CACHE.clear()
     recognizer = WhisperSpeech(record_seconds=30)
     task = asyncio.create_task(recognizer.recognize())
 
     assert await asyncio.to_thread(entered.wait, 1)
-    task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await task
+    recognizer.stop()
+    result = await task
+
+    assert result.text == "提前停止的语音"
     assert await asyncio.to_thread(exited.wait, 1)
 
 
