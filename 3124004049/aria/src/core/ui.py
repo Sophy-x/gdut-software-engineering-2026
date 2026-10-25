@@ -37,6 +37,7 @@ from .commands import (
     thinking_toggle_command_slash,
     subagent_command_slash,
     goal_command_slash,
+    voice_input_command_slash,
 )
 from .commands.goal import sync_goal_runtime
 from .balance import UNAVAILABLE_BALANCE, BalanceProvider
@@ -110,6 +111,7 @@ def _default_command_registry() -> CommandRegistry:
     registry.register(thinking_toggle_command_slash)
     registry.register(subagent_command_slash)
     registry.register(goal_command_slash)
+    registry.register(voice_input_command_slash)
     return registry
 
 

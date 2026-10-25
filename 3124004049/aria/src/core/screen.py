@@ -1678,6 +1678,14 @@ class ChatScreen:
         self._status_message = message
         self.application.invalidate()
 
+    def set_input_text(self, text: str) -> None:
+        """将文本放入输入草稿并将光标移至末尾。"""
+
+        self.input_area.buffer.text = text
+        self.input_area.buffer.cursor_position = len(text)
+        self._layout.focus(self.input_area)
+        self.application.invalidate()
+
     def set_working(self, message: str | None, show_elapsed: bool = True) -> None:
         """设置对话区临时 working 条目（spinner + 消息，可选耗时）。"""
 
