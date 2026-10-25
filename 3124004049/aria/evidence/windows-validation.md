@@ -4,7 +4,7 @@
 
 | 检查 | 结果 |
 | --- | --- |
-| 全量自动化测试（加入语音功能后） | 921 通过、0 失败、3 跳过，耗时 87.82 秒 |
+| 全量自动化测试（加入 Whisper 语音输入后） | 922 通过、0 失败、3 跳过，耗时 77.89 秒 |
 | Linux Docker 容器集成 | 2 项通过：此前验证的 Windows 工作区挂载/读写，以及超时后清理容器；本次默认未启用集成开关 |
 | 六项离线场景 | 6/6 通过 |
 | 程序入口 | `uv run --frozen aria --help` 正常显示帮助 |
@@ -20,14 +20,14 @@ uv run --frozen pytest -q --tb=short -ra
 SKIPPED [1] tests\test_big_task_single_goal.py:114: tsc not installed
 SKIPPED [1] tests\test_swebench_container_integration.py:41: set ARIA_DOCKER_INTEGRATION=1 to run Docker integration tests
 SKIPPED [1] tests\test_swebench_container_integration.py:66: set ARIA_DOCKER_INTEGRATION=1 to run Docker integration tests
-921 passed, 3 skipped in 87.82s (0:01:27)
+922 passed, 3 skipped in 77.89s (0:01:17)
 ```
 
 跳过项分别受可选的 TypeScript 编译器和 Docker 集成开关影响；未通过跳过来规避 Windows 失败。测试中的 POSIX 专属命令、文本编码、路径断言和过短的定时器假设已调整为可跨平台验证的写法。
 
 界面测试通过 prompt-toolkit 的应用会话注入测试输入输出，实际执行布局、消息渲染、历史、快捷键处理等逻辑，不要求测试进程拥有物理 Win32 控制台。此结果不代表已完成真实终端键盘操作或真实模型服务的端到端验证。
 
-语音测试通过替换 PowerShell 子进程验证 UTF-8 编码、识别结果回填、朗读命令和错误处理，不要求测试进程拥有真实麦克风或扬声器。真实语音演示需要在 Windows 上配置语音识别、默认麦克风和系统语音。
+语音测试通过替换录音设备、Whisper 模型和 PowerShell 子进程验证语言检测、识别结果回填、朗读命令和错误处理，不要求测试进程拥有真实麦克风或扬声器。当前 Windows 验证使用 CPU `int8` 配置；首次真实运行还需要下载 faster-whisper `base` 模型。
 
 ## 运行边界
 
