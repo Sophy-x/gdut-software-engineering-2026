@@ -131,7 +131,7 @@ uv run aria --config .aria/settings.json
 
 示例中的域名、模型名和密钥均为占位内容，不能直接连接模型。`.aria/` 已被忽略，勿将真实密钥写入示例文件。
 
-常用操作：`Enter` 发送，`Ctrl+J` 换行，`Esc` 取消请求，`Ctrl+D` 退出。输入 `/` 可以选择 `/model`、`/compact`、`/status`、`/mcp`、`/listen`、`/voice`、`/export` 等命令。Windows、macOS 或 Linux 下输入 `/listen` 录音并自动检测中文或英文，结果会放入草稿，检查后按 `Enter` 发送；Windows 下输入 `/voice on` 开启回复朗读，输入 `/voice off` 关闭。写操作审批支持批准本次、批准本会话或拒绝。
+常用操作：`Enter` 发送，`Ctrl+J` 换行，`Esc` 取消请求或停止录音，`Ctrl+D` 退出。输入 `/` 可以选择 `/model`、`/compact`、`/status`、`/mcp`、`/listen`、`/voice`、`/export` 等命令。Windows、macOS 或 Linux 下输入 `/listen` 开始录音，录音期间按 `Esc` 可立即停止，未手动停止时 12 秒后自动结束；Whisper 会自动检测中文或英文，结果会放入草稿，检查后按 `Enter` 发送。Windows 下输入 `/voice on` 开启回复朗读，输入 `/voice off` 关闭。写操作审批支持批准本次、批准本会话或拒绝。
 
 ## 6. 使用示例与功能演示
 
@@ -183,7 +183,7 @@ uv run aria resume <session-id>
 /listen
 ```
 
-对着麦克风说“请读取 examples/demo-workspace/meeting-notes.txt 并整理成待办清单”。faster-whisper 会自动判断主要语言并转写，识别结果会回填到输入框，用户可以修改识别错误后按 `Enter` 发送；Windows 下模型完成回复后，Aria 使用系统默认语音朗读回复。Linux/macOS 下 `/voice on` 会提示语音输出不可用，但不影响文本对话。
+对着麦克风说“请读取 examples/demo-workspace/meeting-notes.txt 并整理成待办清单”，说完后按 `Esc` 停止录音。faster-whisper 会自动判断主要语言并转写，识别结果会回填到输入框，用户可以修改识别错误后按 `Enter` 发送；Windows 下模型完成回复后，Aria 使用系统默认语音朗读回复。Linux/macOS 下 `/voice on` 会提示语音输出不可用，但不影响文本对话。
 
 ## 7. 测试与验证
 
@@ -197,7 +197,7 @@ uv run --frozen aria --help
 
 离线评测覆盖多轮记忆、文件编辑、工具失败恢复、上下文压缩恢复、取消后的会话恢复和模型重试六种场景，不需要 API Key。默认输出到被忽略的 `evaluation-results/`。语音模块的单元测试通过替换录音设备和 Whisper 模型，不要求测试环境连接真实麦克风或扬声器。
 
-Windows 原生环境最新验证为 922 项测试通过、0 项失败、3 项按环境条件跳过，六项离线评测场景全部通过。详细环境、测试方式与容器评测边界见 [Windows 验证记录](./evidence/windows-validation.md)；其他测试日志与评测报告保存在 [evidence/](./evidence/)。
+Windows 原生环境最新验证为 923 项测试通过、0 项失败、3 项按环境条件跳过，六项离线评测场景全部通过。详细环境、测试方式与容器评测边界见 [Windows 验证记录](./evidence/windows-validation.md)；其他测试日志与评测报告保存在 [evidence/](./evidence/)。
 
 ## 8. 小组分工安排
 

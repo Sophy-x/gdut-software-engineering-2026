@@ -4,7 +4,7 @@
 
 | 检查 | 结果 |
 | --- | --- |
-| 全量自动化测试（加入 Whisper 语音输入后） | 922 通过、0 失败、3 跳过，耗时 77.89 秒 |
+| 全量自动化测试（加入可中断录音后） | 923 通过、0 失败、3 跳过，耗时 74.07 秒 |
 | Linux Docker 容器集成 | 2 项通过：此前验证的 Windows 工作区挂载/读写，以及超时后清理容器；本次默认未启用集成开关 |
 | 六项离线场景 | 6/6 通过 |
 | 程序入口 | `uv run --frozen aria --help` 正常显示帮助 |
@@ -20,7 +20,7 @@ uv run --frozen pytest -q --tb=short -ra
 SKIPPED [1] tests\test_big_task_single_goal.py:114: tsc not installed
 SKIPPED [1] tests\test_swebench_container_integration.py:41: set ARIA_DOCKER_INTEGRATION=1 to run Docker integration tests
 SKIPPED [1] tests\test_swebench_container_integration.py:66: set ARIA_DOCKER_INTEGRATION=1 to run Docker integration tests
-922 passed, 3 skipped in 77.89s (0:01:17)
+923 passed, 3 skipped in 74.07s (0:01:14)
 ```
 
 跳过项分别受可选的 TypeScript 编译器和 Docker 集成开关影响；未通过跳过来规避 Windows 失败。测试中的 POSIX 专属命令、文本编码、路径断言和过短的定时器假设已调整为可跨平台验证的写法。
