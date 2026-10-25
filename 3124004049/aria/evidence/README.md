@@ -1,6 +1,6 @@
 # 测试与功能验证记录
 
-Windows 原生兼容的最新验证：915 项通过、1 项因缺少可选 `tsc` 跳过，六项离线场景通过。环境、复现命令与运行边界见 [Windows 验证记录](./windows-validation.md)。
+Windows 原生兼容的最新验证：923 项通过、3 项按环境条件跳过，六项离线场景通过。环境、复现命令与运行边界见 [Windows 验证记录](./windows-validation.md)。
 
 验证日期：2026-10-21。环境：WSL Ubuntu 22.04、CPython 3.13.16、uv 0.13.4、ripgrep 14.1.1。
 

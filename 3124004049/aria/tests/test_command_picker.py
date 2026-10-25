@@ -2,9 +2,12 @@
 
 import pytest
 
+from prompt_toolkit.buffer import Buffer
 from prompt_toolkit.completion import Completion
+from prompt_toolkit.document import Document
 
 from core.command_picker import CommandPicker
+from core.screen import SlashCommandCompleter
 
 
 def _completions(names: list[str]) -> list[Completion]:
@@ -212,3 +215,21 @@ def test_command_picker_update_keeps_selection_and_scroll() -> None:
     picker2.move(2)
     picker2.update_completions(_completions(["a", "b", "c", "d", "e"]))
     assert picker2.selected.text == "c"
+
+
+def test_command_picker_refreshes_completion_range_when_name_is_unchanged() -> None:
+    """同一候选的前缀变长时也要刷新其替换范围。"""
+
+    completer = SlashCommandCompleter([("listen", "语音输入")])
+    first = list(completer.get_completions(Document("/l", 2), None))
+    picker = CommandPicker(first)
+
+    updated = list(completer.get_completions(Document("/li", 3), None))
+    picker.update_completions(updated)
+    buffer = Buffer()
+    buffer.set_document(Document("/li", 3), bypass_readonly=True)
+    buffer.apply_completion(picker.selected)
+
+    assert picker.selected is not None
+    assert picker.selected.start_position == -2
+    assert buffer.text == "/listen"

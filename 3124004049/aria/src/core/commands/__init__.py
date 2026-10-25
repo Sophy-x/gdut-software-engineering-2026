@@ -24,6 +24,8 @@ from .delete import delete_command_slash
 from .thinking_toggle import thinking_toggle_command_slash
 from .subagent import subagent_command_slash
 from .goal import goal_command_slash
+from .voice_input import voice_input_command_slash
+from .voice_output import voice_output_command_slash
 
 __all__ = [
     "CommandContext",
@@ -48,4 +50,6 @@ __all__ = [
     "thinking_toggle_command_slash",
     "subagent_command_slash",
     "goal_command_slash",
+    "voice_input_command_slash",
+    "voice_output_command_slash",
 ]

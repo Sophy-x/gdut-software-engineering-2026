@@ -395,6 +395,7 @@ class ChatScreen:
         self._finalize_tasks: set[asyncio.Task[None]] = set()
         self._request_active = False
         self._request_task: asyncio.Task[None] | None = None
+        self._cancel_handler: Callable[[], None] | None = None
         self._submitted_draft: DraftState | None = None
         self._approval_prompt: ApprovalPrompt | None = None
         self._skill_picker: SkillPicker | None = None
@@ -402,6 +403,7 @@ class ChatScreen:
         self._text_input: InputPrompt | None = None
         self._command_picker: CommandPicker | None = None
         self._status_message = ""
+        self._voice_output_enabled = False
         self._working_message: str | None = None
         self._working_show_elapsed = True
         self._working_started = 0.0
@@ -991,11 +993,15 @@ class ChatScreen:
             return [self._input_tracker, self._status_window]
         return [self._status_window]
 
-    def _set_bottom_prompt(self, prompt: Container) -> None:
-        """显示底部交互组件，并在行内模式保留状态栏。"""
+    def _set_bottom_prompt(
+        self, prompt: Container, *, keep_input: bool = False
+    ) -> None:
+        """显示底部交互组件，可选择在行内模式同时保留输入框。"""
 
         children = [prompt]
         if self._inline_mode:
+            if keep_input:
+                children.append(self._input_tracker)
             children.append(self._status_window)
         self._bottom_container.children = children
 
@@ -1394,10 +1400,19 @@ class ChatScreen:
         return key_bindings
 
     def cancel_request(self) -> None:
-        """取消正在运行的模型请求。"""
+        """取消请求，或交给当前交互组件处理更细粒度的停止动作。"""
+
+        if self._cancel_handler is not None:
+            self._cancel_handler()
+            return
 
         if self._request_task is not None and not self._request_task.done():
             self._request_task.cancel()
+
+    def set_cancel_handler(self, handler: Callable[[], None] | None) -> None:
+        """设置 Esc 的临时处理器，例如停止录音但继续处理已采集内容。"""
+
+        self._cancel_handler = handler
 
     def _selected_completion(self, buffer) -> object | None:
         """返回补全列表当前选中的补全项。"""
@@ -1420,7 +1435,7 @@ class ChatScreen:
                 self._command_picker = CommandPicker(
                     completions, on_apply=self._apply_clicked_completion
                 )
-                self._set_bottom_prompt(self._command_picker.window)
+                self._set_bottom_prompt(self._command_picker.window, keep_input=True)
             else:
                 self._command_picker.update_completions(completions)
         else:
@@ -1676,6 +1691,26 @@ class ChatScreen:
         """更新状态栏中的运行时提示。"""
 
         self._status_message = message
+        self.application.invalidate()
+
+    @property
+    def voice_output_enabled(self) -> bool:
+        """返回是否朗读后续助手回复。"""
+
+        return self._voice_output_enabled
+
+    def set_voice_output_enabled(self, enabled: bool) -> None:
+        """设置是否朗读后续助手回复。"""
+
+        self._voice_output_enabled = enabled
+        self.application.invalidate()
+
+    def set_input_text(self, text: str) -> None:
+        """将文本放入输入草稿并将光标移至末尾。"""
+
+        self.input_area.buffer.text = text
+        self.input_area.buffer.cursor_position = len(text)
+        self._layout.focus(self.input_area)
         self.application.invalidate()
 
     def set_working(self, message: str | None, show_elapsed: bool = True) -> None:

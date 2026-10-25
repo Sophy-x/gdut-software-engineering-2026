@@ -1149,6 +1149,23 @@ def test_completion_swaps_bottom_area_to_picker(tmp_path: Path) -> None:
     assert screen._bottom_container.children == [screen._status_window]
 
 
+def test_inline_completion_keeps_input_visible_with_picker(tmp_path: Path) -> None:
+    """行内模式下候选列表显示时仍保留当前输入内容。"""
+
+    screen = ChatScreen(create_status_info("test-model", "n/a", tmp_path))
+    screen.input_area.text = "/sta"
+
+    screen._on_completions_changed(_FakeBuffer(["status"]))
+
+    assert screen.input_area.text == "/sta"
+    assert screen._command_picker is not None
+    assert screen._bottom_container.children == [
+        screen._command_picker.window,
+        screen._input_tracker,
+        screen._status_window,
+    ]
+
+
 class _FakeCompleteState:
     """模拟补全状态，completions 为文本列表。"""
 
