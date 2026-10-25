@@ -26,6 +26,17 @@ try {
 }
 """
 
+_SYNTHESIZE_SCRIPT = r"""
+Add-Type -AssemblyName System.Speech
+$text = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__TEXT__'))
+$synthesizer = New-Object System.Speech.Synthesis.SpeechSynthesizer
+try {
+    $synthesizer.Speak($text)
+} finally {
+    $synthesizer.Dispose()
+}
+"""
+
 
 class WindowsSpeech:
     """封装 Windows PowerShell 的离线语音识别和合成 API。"""
@@ -55,6 +66,13 @@ class WindowsSpeech:
 
         return await asyncio.to_thread(self._recognize_sync)
 
+    async def speak(self, text: str) -> None:
+        """使用 Windows 默认语音合成器朗读文本。"""
+
+        if not text.strip():
+            return
+        await asyncio.to_thread(self._speak_sync, text)
+
     def _recognize_sync(self) -> str | None:
         """执行一次 Windows DictationGrammar 语音识别。"""
 
@@ -68,6 +86,17 @@ class WindowsSpeech:
             return base64.b64decode(result.stdout.strip(), validate=True).decode("utf-8")
         except (ValueError, UnicodeDecodeError) as exc:
             raise VoiceError("Windows speech recognition returned invalid text") from exc
+
+    def _speak_sync(self, text: str) -> None:
+        """执行一次 Windows 语音合成。"""
+
+        encoded_text = base64.b64encode(text.encode("utf-8")).decode("ascii")
+        result = _run_powershell(
+            _SYNTHESIZE_SCRIPT.replace("__TEXT__", encoded_text), timeout=120
+        )
+        if result.returncode != 0:
+            detail = result.stderr.strip() or "speech synthesis failed"
+            raise VoiceError(detail)
 
 
 def _run_powershell(script: str, *, timeout: float) -> subprocess.CompletedProcess[str]:

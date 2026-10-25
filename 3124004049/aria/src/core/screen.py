@@ -402,6 +402,7 @@ class ChatScreen:
         self._text_input: InputPrompt | None = None
         self._command_picker: CommandPicker | None = None
         self._status_message = ""
+        self._voice_output_enabled = False
         self._working_message: str | None = None
         self._working_show_elapsed = True
         self._working_started = 0.0
@@ -1676,6 +1677,18 @@ class ChatScreen:
         """更新状态栏中的运行时提示。"""
 
         self._status_message = message
+        self.application.invalidate()
+
+    @property
+    def voice_output_enabled(self) -> bool:
+        """返回是否朗读后续助手回复。"""
+
+        return self._voice_output_enabled
+
+    def set_voice_output_enabled(self, enabled: bool) -> None:
+        """设置是否朗读后续助手回复。"""
+
+        self._voice_output_enabled = enabled
         self.application.invalidate()
 
     def set_input_text(self, text: str) -> None:

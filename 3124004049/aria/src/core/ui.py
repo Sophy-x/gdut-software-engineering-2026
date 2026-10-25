@@ -38,6 +38,7 @@ from .commands import (
     subagent_command_slash,
     goal_command_slash,
     voice_input_command_slash,
+    voice_output_command_slash,
 )
 from .commands.goal import sync_goal_runtime
 from .balance import UNAVAILABLE_BALANCE, BalanceProvider
@@ -73,6 +74,7 @@ from .tools import (
     create_search_files_tool,
     create_write_file_tool,
 )
+from .voice import VoiceError, WindowsSpeech
 
 
 AGENT_SYSTEM_PROMPT = load_prompt("agent")
@@ -112,6 +114,7 @@ def _default_command_registry() -> CommandRegistry:
     registry.register(subagent_command_slash)
     registry.register(goal_command_slash)
     registry.register(voice_input_command_slash)
+    registry.register(voice_output_command_slash)
     return registry
 
 
@@ -135,6 +138,7 @@ async def run_chat(
     usage_totals = UsageTotals()
     latest_usage: UsageEvent | None = None
     copy_hint = ""
+    speech = WindowsSpeech()
 
     async def refresh_balance() -> None:
         """每轮对话后刷新余额，失败保留旧值。"""
@@ -370,6 +374,14 @@ async def run_chat(
             _update_persistence_status(screen, session)
             await refresh_balance()
             await commit_response()
+            if getattr(screen, "voice_output_enabled", False) and response_parts:
+                screen.set_status_message("Speaking response...")
+                try:
+                    await speech.speak("".join(response_parts))
+                except VoiceError as exc:
+                    screen.add_entry("tool", f"Voice output failed: {exc}")
+                finally:
+                    screen.set_status_message("")
         finally:
             # 本轮请求结束（成功/失败/取消），清除 working 提示
             screen.set_working(None)

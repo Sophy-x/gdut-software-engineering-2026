@@ -40,6 +40,22 @@ def test_recognize_reports_service_errors(monkeypatch: pytest.MonkeyPatch) -> No
         WindowsSpeech()._recognize_sync()
 
 
+def test_speak_passes_utf8_text_to_powershell(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[str, float]] = []
+
+    def fake_run(script: str, *, timeout: float):
+        calls.append((script, timeout))
+        return subprocess.CompletedProcess([], 0, "", "")
+
+    monkeypatch.setattr("core.voice._run_powershell", fake_run)
+
+    WindowsSpeech()._speak_sync("处理完成")
+
+    assert len(calls) == 1
+    assert calls[0][1] == 120
+    assert base64.b64encode("处理完成".encode("utf-8")).decode("ascii") in calls[0][0]
+
+
 @pytest.mark.asyncio
 async def test_listen_command_places_transcript_in_editable_draft(
     monkeypatch: pytest.MonkeyPatch,
@@ -75,3 +91,34 @@ async def test_listen_command_places_transcript_in_editable_draft(
     assert screen.draft == "识别出的任务"
     assert screen.entries == [("tool", "Speech recognized. Review the draft and press Enter.")]
     assert screen.status == ["Listening for speech...", ""]
+
+
+@pytest.mark.asyncio
+async def test_voice_command_toggles_output(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeScreen:
+        voice_output_enabled = False
+
+        def __init__(self) -> None:
+            self.entries: list[tuple[str, str]] = []
+
+        def add_entry(self, role: str, content: str) -> None:
+            self.entries.append((role, content))
+
+        def set_voice_output_enabled(self, enabled: bool) -> None:
+            self.voice_output_enabled = enabled
+
+    class FakeSpeech:
+        @staticmethod
+        def available() -> bool:
+            return True
+
+    screen = FakeScreen()
+    from core.commands import voice_output
+
+    monkeypatch.setattr(voice_output, "WindowsSpeech", FakeSpeech)
+
+    context = SimpleNamespace(screen=screen, arguments="on")
+    await voice_output.voice_output_command(context)
+
+    assert screen.voice_output_enabled is True
+    assert screen.entries == [("tool", "Voice output enabled.")]
