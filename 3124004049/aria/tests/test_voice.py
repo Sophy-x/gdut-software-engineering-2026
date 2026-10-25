@@ -17,7 +17,8 @@ from core.voice import (
 
 def test_recognize_decodes_utf8_transcript(monkeypatch: pytest.MonkeyPatch) -> None:
     transcript = "请整理项目文件"
-    encoded = base64.b64encode(transcript.encode("utf-8")).decode("ascii")
+    payload = '{"text":"请整理项目文件","confidence":0.91}'
+    encoded = base64.b64encode(payload.encode("utf-8")).decode("ascii")
     monkeypatch.setattr(
         "core.voice._run_powershell",
         lambda script, timeout: subprocess.CompletedProcess([], 0, encoded, ""),
@@ -39,13 +40,18 @@ def test_recognize_reports_when_no_speech(monkeypatch: pytest.MonkeyPatch) -> No
 def test_recognize_reports_low_confidence_speech(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    payload = '{"text":"请整理项目文件","confidence":0.31}'
+    encoded = base64.b64encode(payload.encode("utf-8")).decode("ascii")
     monkeypatch.setattr(
         "core.voice._run_powershell",
-        lambda script, timeout: subprocess.CompletedProcess([], 3, "", ""),
+        lambda script, timeout: subprocess.CompletedProcess([], 0, encoded, ""),
     )
 
-    with pytest.raises(LowConfidenceSpeech, match="confidence was too low"):
+    with pytest.raises(LowConfidenceSpeech, match="confidence was too low") as caught:
         WindowsSpeech()._recognize_sync()
+
+    assert caught.value.transcript == "请整理项目文件"
+    assert caught.value.confidence == 0.31
 
 
 def test_recognize_reports_service_errors(monkeypatch: pytest.MonkeyPatch) -> None:

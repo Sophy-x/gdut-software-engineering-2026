@@ -19,7 +19,12 @@ async def listen_command(context: CommandContext) -> None:
     except NoSpeechDetected as exc:
         context.screen.add_entry("tool", f"No speech detected: {exc}")
     except LowConfidenceSpeech as exc:
-        context.screen.add_entry("tool", f"Speech was unclear: {exc}")
+        context.screen.set_input_text(exc.transcript)
+        context.screen.add_entry(
+            "tool",
+            f"Speech was unclear (confidence {exc.confidence:.2f}). "
+            "Review the draft before sending.",
+        )
     except VoiceError as exc:
         context.screen.add_entry("tool", f"Voice input failed: {exc}")
     else:

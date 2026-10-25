@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+import json
 import os
 import shutil
 import subprocess
@@ -19,6 +20,14 @@ class NoSpeechDetected(VoiceError):
 class LowConfidenceSpeech(VoiceError):
     """检测到语音，但识别置信度过低。"""
 
+    def __init__(self, transcript: str, confidence: float) -> None:
+        self.transcript = transcript
+        self.confidence = confidence
+        super().__init__(
+            f"Speech was detected but recognition confidence was too low "
+            f"({confidence:.2f})"
+        )
+
 
 _RECOGNIZE_SCRIPT = r"""
 Add-Type -AssemblyName System.Speech
@@ -28,8 +37,11 @@ try {
     $engine.SetInputToDefaultAudioDevice()
     $result = $engine.Recognize([TimeSpan]::FromSeconds(12))
     if ($null -eq $result) { exit 2 }
-    if ($result.Confidence -lt 0.45) { exit 3 }
-    [Console]::WriteLine([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($result.Text)))
+    $payload = @{
+        text = $result.Text
+        confidence = [double]$result.Confidence
+    } | ConvertTo-Json -Compress
+    [Console]::WriteLine([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($payload)))
 } finally {
     $engine.Dispose()
 }
@@ -70,8 +82,8 @@ class WindowsSpeech:
             ).is_file()
         )
 
-    async def recognize(self) -> str | None:
-        """监听最多 12 秒并返回识别文本，无有效语音时返回 None。"""
+    async def recognize(self) -> str:
+        """监听最多 12 秒并返回识别文本，无语音或设备异常时抛出 VoiceError。"""
 
         return await asyncio.to_thread(self._recognize_sync)
 
@@ -82,8 +94,8 @@ class WindowsSpeech:
             return
         await asyncio.to_thread(self._speak_sync, text)
 
-    def _recognize_sync(self) -> str | None:
-        """执行一次 Windows DictationGrammar 语音识别。"""
+    def _recognize_sync(self) -> str:
+        """执行一次 Windows DictationGrammar 语音识别并校验识别结果。"""
 
         result = _run_powershell(_RECOGNIZE_SCRIPT, timeout=20)
         if result.returncode == 2:
@@ -96,9 +108,18 @@ class WindowsSpeech:
             detail = result.stderr.strip() or "speech recognition failed"
             raise VoiceError(detail)
         try:
-            return base64.b64decode(result.stdout.strip(), validate=True).decode("utf-8")
-        except (ValueError, UnicodeDecodeError) as exc:
+            payload = json.loads(
+                base64.b64decode(result.stdout.strip(), validate=True).decode("utf-8")
+            )
+            transcript = payload["text"]
+            confidence = float(payload["confidence"])
+            if not isinstance(transcript, str) or not transcript.strip():
+                raise ValueError("empty transcript")
+        except (KeyError, TypeError, ValueError, UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise VoiceError("Windows speech recognition returned invalid text") from exc
+        if confidence < 0.45:
+            raise LowConfidenceSpeech(transcript, confidence)
+        return transcript
 
     def _speak_sync(self, text: str) -> None:
         """执行一次 Windows 语音合成。"""
