@@ -993,11 +993,15 @@ class ChatScreen:
             return [self._input_tracker, self._status_window]
         return [self._status_window]
 
-    def _set_bottom_prompt(self, prompt: Container) -> None:
-        """显示底部交互组件，并在行内模式保留状态栏。"""
+    def _set_bottom_prompt(
+        self, prompt: Container, *, keep_input: bool = False
+    ) -> None:
+        """显示底部交互组件，可选择在行内模式同时保留输入框。"""
 
         children = [prompt]
         if self._inline_mode:
+            if keep_input:
+                children.append(self._input_tracker)
             children.append(self._status_window)
         self._bottom_container.children = children
 
@@ -1431,7 +1435,7 @@ class ChatScreen:
                 self._command_picker = CommandPicker(
                     completions, on_apply=self._apply_clicked_completion
                 )
-                self._set_bottom_prompt(self._command_picker.window)
+                self._set_bottom_prompt(self._command_picker.window, keep_input=True)
             else:
                 self._command_picker.update_completions(completions)
         else:
