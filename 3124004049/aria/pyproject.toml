@@ -4,9 +4,12 @@ version = "0.1.0"
 description = "一个简洁、可扩展的 Coding Agent"
 requires-python = ">=3.11"
 dependencies = [
+    "faster-whisper>=1.1.0,<2.0.0",
+    "numpy>=2.0.0,<3.0.0",
     "openai>=1.0.0,<2.0.0",
     "prompt-toolkit>=3.0.0,<4.0.0",
     "pygments>=2.20.0",
+    "sounddevice>=0.5.0,<1.0.0",
 ]
 
 [build-system]

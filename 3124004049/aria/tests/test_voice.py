@@ -2,66 +2,85 @@
 
 import base64
 import subprocess
+import sys
 from types import SimpleNamespace
 
 import pytest
 
 from core.commands import voice_input
 from core.voice import (
-    LowConfidenceSpeech,
     NoSpeechDetected,
+    SpeechRecognition,
     VoiceError,
+    WhisperSpeech,
     WindowsSpeech,
 )
 
 
-def test_recognize_decodes_utf8_transcript(monkeypatch: pytest.MonkeyPatch) -> None:
-    transcript = "请整理项目文件"
-    payload = '{"text":"请整理项目文件","confidence":0.91}'
-    encoded = base64.b64encode(payload.encode("utf-8")).decode("ascii")
-    monkeypatch.setattr(
-        "core.voice._run_powershell",
-        lambda script, timeout: subprocess.CompletedProcess([], 0, encoded, ""),
-    )
-
-    assert WindowsSpeech()._recognize_sync() == transcript
-
-
-def test_recognize_reports_when_no_speech(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        "core.voice._run_powershell",
-        lambda script, timeout: subprocess.CompletedProcess([], 2, "", ""),
-    )
-
-    with pytest.raises(NoSpeechDetected, match="No speech detected"):
-        WindowsSpeech()._recognize_sync()
-
-
-def test_recognize_reports_low_confidence_speech(
+def test_whisper_recognizes_audio_and_detects_language(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    payload = '{"text":"请整理项目文件","confidence":0.31}'
-    encoded = base64.b64encode(payload.encode("utf-8")).decode("ascii")
-    monkeypatch.setattr(
-        "core.voice._run_powershell",
-        lambda script, timeout: subprocess.CompletedProcess([], 0, encoded, ""),
-    )
+    import numpy as np
 
-    with pytest.raises(LowConfidenceSpeech, match="confidence was too low") as caught:
-        WindowsSpeech()._recognize_sync()
+    class FakeSoundDevice:
+        @staticmethod
+        def rec(*args, **kwargs):
+            return np.ones((kwargs["channels"],), dtype=np.float32)
 
-    assert caught.value.transcript == "请整理项目文件"
-    assert caught.value.confidence == 0.31
+    class FakeModel:
+        def transcribe(self, audio, **kwargs):
+            assert kwargs["language"] is None
+            return iter([SimpleNamespace(text=" 请整理项目文件 ")]), SimpleNamespace(
+                language="zh", language_probability=0.97
+            )
+
+    class FakeFasterWhisper:
+        WhisperModel = lambda *args, **kwargs: FakeModel()
+
+    monkeypatch.setitem(sys.modules, "sounddevice", FakeSoundDevice)
+    monkeypatch.setitem(sys.modules, "faster_whisper", FakeFasterWhisper)
+    import core.voice as voice
+
+    voice._MODEL_CACHE.clear()
+    result = WhisperSpeech(record_seconds=1)._recognize_sync()
+
+    assert result == SpeechRecognition("请整理项目文件", "zh", 0.97)
 
 
-def test_recognize_reports_service_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_whisper_reports_silent_recording(monkeypatch: pytest.MonkeyPatch) -> None:
+    import numpy as np
+
+    class FakeSoundDevice:
+        @staticmethod
+        def rec(*args, **kwargs):
+            return np.zeros((kwargs["channels"],), dtype=np.float32)
+
+    monkeypatch.setitem(sys.modules, "sounddevice", FakeSoundDevice)
+
+    with pytest.raises(NoSpeechDetected, match="No speech detected"):
+        WhisperSpeech(record_seconds=1)._recognize_sync()
+
+
+def test_whisper_reports_recording_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FailingSoundDevice:
+        @staticmethod
+        def rec(*args, **kwargs):
+            raise OSError("No microphone")
+
+    monkeypatch.setitem(sys.modules, "sounddevice", FailingSoundDevice)
+
+    with pytest.raises(VoiceError, match="No microphone"):
+        WhisperSpeech(record_seconds=1)._recognize_sync()
+
+
+def test_speech_output_reports_service_errors(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "core.voice._run_powershell",
         lambda script, timeout: subprocess.CompletedProcess([], 1, "", "No microphone"),
     )
 
     with pytest.raises(VoiceError, match="No microphone"):
-        WindowsSpeech()._recognize_sync()
+        WindowsSpeech()._speak_sync("测试")
 
 
 def test_speak_passes_utf8_text_to_powershell(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -104,16 +123,22 @@ async def test_listen_command_places_transcript_in_editable_draft(
         def available() -> bool:
             return True
 
-        async def recognize(self) -> str:
-            return "识别出的任务"
+        async def recognize(self) -> SpeechRecognition:
+            return SpeechRecognition("识别出的任务", "zh", 0.94)
 
     screen = FakeScreen()
-    monkeypatch.setattr(voice_input, "WindowsSpeech", FakeSpeech)
+    monkeypatch.setattr(voice_input, "WhisperSpeech", FakeSpeech)
 
     await voice_input.listen_command(SimpleNamespace(screen=screen))
 
     assert screen.draft == "识别出的任务"
-    assert screen.entries == [("tool", "Speech recognized. Review the draft and press Enter.")]
+    assert screen.entries == [
+        (
+            "tool",
+            "Speech recognized (zh, language probability 0.94). "
+            "Review the draft and press Enter.",
+        )
+    ]
     assert screen.status == ["Listening for speech...", ""]
 
 

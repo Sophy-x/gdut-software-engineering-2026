@@ -1,38 +1,37 @@
 """实现 /listen 命令：将识别到的语音放入可编辑输入框。"""
 
 from .registry import CommandContext, SlashCommand
-from ..voice import LowConfidenceSpeech, NoSpeechDetected, VoiceError, WindowsSpeech
+from ..voice import NoSpeechDetected, SpeechRecognition, VoiceError, WhisperSpeech
 
 
 async def listen_command(context: CommandContext) -> None:
     """监听一次语音并将识别文本填入输入草稿。"""
 
-    if not WindowsSpeech.available():
+    recognizer = WhisperSpeech()
+    if not recognizer.available():
         context.screen.add_entry(
-            "tool", "Voice input is available on Windows with speech recognition configured."
+            "tool",
+            "Whisper voice input is not installed. Run `uv sync --frozen` first.",
         )
         return
 
     context.screen.set_status_message("Listening for speech...")
     try:
-        transcript = await WindowsSpeech().recognize()
+        result = await recognizer.recognize()
     except NoSpeechDetected as exc:
         context.screen.add_entry("tool", f"No speech detected: {exc}")
-    except LowConfidenceSpeech as exc:
-        context.screen.set_input_text(exc.transcript)
-        context.screen.add_entry(
-            "tool",
-            f"Speech was unclear (confidence {exc.confidence:.2f}). "
-            "Review the draft before sending.",
-        )
     except VoiceError as exc:
         context.screen.add_entry("tool", f"Voice input failed: {exc}")
     else:
-        if transcript:
-            context.screen.set_input_text(transcript)
-            context.screen.add_entry("tool", "Speech recognized. Review the draft and press Enter.")
-        else:
-            context.screen.add_entry("tool", "No clear speech detected.")
+        if isinstance(result, str):
+            result = SpeechRecognition(result, "unknown", 0.0)
+        context.screen.set_input_text(result.text)
+        context.screen.add_entry(
+            "tool",
+            f"Speech recognized ({result.language}, "
+            f"language probability {result.language_probability:.2f}). "
+            "Review the draft and press Enter.",
+        )
     finally:
         context.screen.set_status_message("")
 
